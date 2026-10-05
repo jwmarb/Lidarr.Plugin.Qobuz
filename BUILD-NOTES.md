@@ -99,8 +99,20 @@ to unit-test the mapper directly against real library models, the only clean opt
 a separate non-merged test target or dropping `Internalize`, and neither is worth
 changing the shipped artifact for.
 
-## No test infrastructure
+## Verifying a change
 
-There is no test project in this repo and no `dotnet test` target. "Verification"
-for this codebase currently means: the sln compiles, and the ILRepack merge produces
-a single assembly. Any behavioural claim beyond that is unverified by execution.
+```bash
+dotnet test src/Lidarr.Plugin.Qobuz.Tests/Lidarr.Plugin.Qobuz.Tests.csproj -p:NuGetAudit=false
+```
+
+148 tests, NUnit 3.14 + FluentAssertions 5.10.3, matching the versions the Lidarr tree
+itself uses so the plugin does not introduce a second test toolchain.
+
+Two traps worth knowing when adding tests:
+
+- **Await your async assertions.** A non-awaited `act.Should().ThrowAsync<T>()` returns an
+  unobserved `Task` and the assertion never runs — on FluentAssertions 5.10.3 it passes
+  even when the target throws nothing at all. The synchronous `.Should().Throw<T>()` on a
+  `Func<Task>` does assert, which makes the broken form easy to miss.
+- **Tests run against the ILRepack-merged assembly** (see the section above), so a test
+  signature may not name a merged library type.

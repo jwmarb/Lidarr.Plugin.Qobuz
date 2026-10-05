@@ -216,13 +216,65 @@ the old `return null` caused a host NRE and silently empty results.
 Lesson worth keeping: "I throw a descriptive exception" is not the same claim as "the
 user sees a descriptive message". The host decides.
 
-## Open item (the only one)
+## Quality pass: reviewer verdict (sub-cf0e, 2026-10-04)
 
-**Reviewer `sub-cf0e` has not reported yet.** It has been running a long time; I sent it a
-delta describing everything I fixed on my own so it does not re-derive those, and asked
-for a partial report ordered by severity. Its findings still need to be read and acted on
-before this work can be called finished. Everything else in this plan is done and
-verified.
+**"Ship after Critical #1."** It verified the build, re-ran the suite, and proved two of
+its findings by execution rather than by reading. Every finding was real; all are fixed.
+
+**Critical — a partially-failed album was stranded forever.** I reported partial success
+as `DownloadItemStatus.Warning`, with a comment asserting the downloaded files were
+"still importable". They were not. `CompletedDownloadService.Check` returns unless the
+status is `Completed` (`CompletedDownloadService.cs:59`) and `FailedDownloadService` acts
+only on `Failed` (`:79`), and upstream pins this deliberately — its own test lists
+`Warning` under `should_not_process_if_download_status_isnt_completed`
+(`ProcessFixture.cs:105`). So an 11-of-12-track album was never imported, never failed,
+never blocklisted and never retried. The terminal decision is now binary: a shortfall
+reports `Failed` with the counts in the message, so Lidarr can blocklist and re-search.
+I confirmed all three host facts in the submodule before changing anything.
+
+**Warning — delete-before-cancel.** `RemoveItem` deleted `OutputPath` recursively *before*
+cancelling, so a still-running download re-created the directory and its `.part` file on
+the next track, orphaning files under a path Lidarr believed gone. Cancel now runs first.
+
+**Warning — the shutdown path was unreachable in production.** Lidarr never disposes its
+container, so `IDisposable` on the proxy was decorative and the 10s bounded shutdown I
+wrote in `DownloadTaskQueue.Dispose` never ran. `QobuzProxy` now implements
+`IHandle<ApplicationShutdownRequested>`, the host's own convention (used by `Scheduler`,
+`CommandExecutor`, `DatabaseTarget`).
+
+**Warning — terminal state was split across two modules.** The executor set the terminal
+status while the queue set the running one, so neither owned a job's lifecycle and the
+early-return path left a job stuck at `Queued` — falsifying the guarantee in the queue's
+own doc comment. `ExecuteAsync` now returns an `AlbumDownloadOutcome` and the queue
+applies every transition.
+
+**Warning — a test that asserted nothing.** `Rejects_a_null_job` used a non-awaited
+`act.Should().ThrowAsync<T>()`, which returns an unobserved `Task`. I reproduced this in a
+scratch project on FluentAssertions 5.10.3: the non-awaited form passes even when the
+target throws nothing at all. Fixed, then **mutation-tested** — removing the guard makes
+it fail, restoring it makes it pass. It was the only occurrence in nine test files.
+
+Suggestions taken: stale `net6.0` ILRepack `LibraryPath` now follows `$(TargetFramework)`
+(the `net6.0` directory does not exist); the orphaned "No test infrastructure" section in
+BUILD-NOTES.md is replaced with accurate guidance including the await-your-async-assertions
+trap; `HarnessSmokeTest` deleted as noise. The big one — **the host-facing boundary was
+entirely untested, and the reviewer noted every remaining defect lived in that band** — is
+addressed by `QobuzProxyQueueReportingTests`, 13 tests asserting what Lidarr is actually
+told: bytes not track counts, no fabricated ETA, the title format, and that bad URLs,
+unknown containers and non-Qobuz indexers are rejected at the door.
+
+Suggestions deliberately **not** taken, with reasons:
+- **Collapse `TrackPathTemplate`.** It is more machinery than two fixed paths need, but it
+  is the right shape if user-configurable paths ever land, and it is covered by 16 tests.
+  Deleting working, tested code to save ~15 lines is not worth the churn now.
+- **Simplify `DownloadProgressSnapshot`'s derived properties.** The special cases
+  (0.99 cap, completed-overrides-estimate, non-negative clamp) each exist because a naive
+  version reports something wrong to the user, and each is pinned by a test.
+
+Its "Unverified" items I accept as open and low-priority: `_apiLock` contention cannot be
+measured without live credentials; the library's 1200-track `GetAlbum` cap is academic;
+session eviction is by arbitrary key order rather than recency, which costs a re-login
+rather than correctness now that eviction no longer disposes.
 
 ## Defects I found in my own new code, after the implementation was "done"
 
