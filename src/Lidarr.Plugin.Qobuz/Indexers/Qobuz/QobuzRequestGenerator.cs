@@ -7,64 +7,83 @@ using NzbDrone.Plugin.Qobuz.API;
 
 namespace NzbDrone.Core.Indexers.Qobuz
 {
+    /// <summary>
+    /// Builds the Qobuz album-search requests that Lidarr's HTTP pipeline executes.
+    /// </summary>
+    /// <remarks>
+    /// The requests are hand-built rather than delegated to the Qobuz library's own
+    /// <c>SearchAlbums</c>, because that method performs the HTTP call itself and returns a
+    /// parsed result, whereas <see cref="HttpIndexerBase{TSettings}"/> requires an
+    /// <see cref="IndexerRequest"/> it can execute, retry and rate-limit on its own terms. The
+    /// library offers no "build me the request" primitive.
+    /// </remarks>
     public class QobuzRequestGenerator : IIndexerRequestGenerator
     {
         private const int PageSize = 100;
         private const int MaxPages = 15;
-        public QobuzIndexerSettings Settings { get; set; }
-        public Logger Logger { get; set; }
 
+        private readonly IQobuzSession _session;
+        private readonly Logger _logger;
+
+        public QobuzRequestGenerator(IQobuzSession session, Logger logger)
+        {
+            _session = session ?? throw new ArgumentNullException(nameof(session));
+            _logger = logger;
+        }
+
+        /// <summary>
+        /// Qobuz has no feed to poll, so RSS is unsupported and this exists only so Lidarr has
+        /// something to exercise when testing the indexer's settings.
+        /// </summary>
         public virtual IndexerPageableRequestChain GetRecentRequests()
         {
-            // this is a lazy implementation, just here so that lidarr has something to test against when saving settings
-            var pageableRequests = new IndexerPageableRequestChain();
-            pageableRequests.Add(GetRequests("never gonna give you up"));
-
-            return pageableRequests;
+            var chain = new IndexerPageableRequestChain();
+            chain.Add(GetRequests("never gonna give you up", pages: 1));
+            return chain;
         }
 
         public IndexerPageableRequestChain GetSearchRequests(AlbumSearchCriteria searchCriteria)
         {
             var chain = new IndexerPageableRequestChain();
-
             chain.AddTier(GetRequests($"{searchCriteria.ArtistQuery} {searchCriteria.AlbumQuery}"));
-
             return chain;
         }
 
         public IndexerPageableRequestChain GetSearchRequests(ArtistSearchCriteria searchCriteria)
         {
             var chain = new IndexerPageableRequestChain();
-
             chain.AddTier(GetRequests(searchCriteria.ArtistQuery));
-
             return chain;
         }
 
-        private IEnumerable<IndexerRequest> GetRequests(string searchParameters)
+        private IEnumerable<IndexerRequest> GetRequests(string searchQuery, int pages = MaxPages)
         {
-            // make sure we are logged in and have valid credentials
-            // if we don't it should throw an error
-            if (!QobuzAPI.Instance.Client.IsAppSecretValid())
+            if (string.IsNullOrWhiteSpace(searchQuery))
             {
-                QobuzAPI.Instance.PickSignInFromSettings(Settings, Logger);
+                yield break;
             }
 
-            for (var page = 0; page < MaxPages; page++)
+            var trimmedQuery = searchQuery.Trim();
+
+            for (var page = 0; page < pages; page++)
             {
-                var data = new Dictionary<string, string>()
+                var parameters = new Dictionary<string, string>
                 {
-                    ["query"] = searchParameters,
-                    ["limit"] = $"{PageSize}",
-                    ["offset"] = $"{page * PageSize}",
+                    ["query"] = trimmedQuery,
+                    ["limit"] = PageSize.ToString(),
+                    ["offset"] = (page * PageSize).ToString(),
                 };
 
-                var url = QobuzAPI.Instance!.GetAPIUrl("/album/search", data);
-                var req = new IndexerRequest(url, HttpAccept.Json);
-                req.HttpRequest.Method = System.Net.Http.HttpMethod.Get;
-                req.HttpRequest.Headers.Add("X-App-ID", $"{QobuzAPI.Instance.Client.AppId}");
-                req.HttpRequest.Headers.Add("X-User-Auth-Token", $"{QobuzAPI.Instance.Login.AuthToken}");
-                yield return req;
+                var url = _session.BuildApiUrl("/album/search", parameters);
+
+                var request = new IndexerRequest(url, HttpAccept.Json);
+                request.HttpRequest.Method = System.Net.Http.HttpMethod.Get;
+
+                // Header casing matches what the Qobuz web player sends.
+                request.HttpRequest.Headers.Add("X-App-Id", _session.AppId);
+                request.HttpRequest.Headers.Add("X-User-Auth-Token", _session.AuthToken);
+
+                yield return request;
             }
         }
     }

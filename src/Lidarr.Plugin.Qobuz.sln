@@ -29,6 +29,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lidarr.Core", "..\ext\Lidar
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QobuzApiSharp", "..\ext\QobuzApiSharp\QobuzApiSharp\QobuzApiSharp.csproj", "{D1B3BBA1-AF90-41F1-B61E-C19A578817CC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lidarr.Plugin.Qobuz.Tests", "Lidarr.Plugin.Qobuz.Tests\Lidarr.Plugin.Qobuz.Tests.csproj", "{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -93,6 +95,18 @@ Global
 		{D1B3BBA1-AF90-41F1-B61E-C19A578817CC}.Release|x64.Build.0 = Release|Any CPU
 		{D1B3BBA1-AF90-41F1-B61E-C19A578817CC}.Release|x86.ActiveCfg = Release|Any CPU
 		{D1B3BBA1-AF90-41F1-B61E-C19A578817CC}.Release|x86.Build.0 = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|x64.Build.0 = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Debug|x86.Build.0 = Debug|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|x64.ActiveCfg = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|x64.Build.0 = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|x86.ActiveCfg = Release|Any CPU
+		{0D10A446-81AD-4B0B-8D06-A5EA1EE96E5F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -1,14 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFrameworks>net8.0</TargetFrameworks>
-	  <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-	  <LangVersion>latest</LangVersion>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
-
-  <ItemGroup>
-    <AdditionalFiles Remove="E:\Projects\GitHub\Lidarr.Plugin.Qobuz\src\stylecop.json" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.34.2">
@@ -23,9 +20,20 @@
     <ProjectReference Include="..\..\ext\Lidarr\src\NzbDrone.Core\Lidarr.Core.csproj" />
     <ProjectReference Include="..\..\ext\QobuzApiSharp\QobuzApiSharp\QobuzApiSharp.csproj" />
   </ItemGroup>
-	
-  <Target Name="PostBuild" AfterTargets="ILRepacker">
-    <Exec ContinueOnError="true" Command="COPY &quot;$(TargetPath)&quot; &quot;C:\ProgramData\Lidarr\plugins\TrevTV\Lidarr.Plugin.Qobuz&quot;" />
+
+  <!--
+    Optional local deploy of the merged plugin assembly, opt-in via a property:
+
+      dotnet build src/Lidarr.Plugin.Qobuz.sln -c Release -f net8.0 \
+        -p:QobuzPluginDeployPath=/path/to/lidarr/plugins/TrevTV/Lidarr.Plugin.Qobuz
+
+    This replaces a hardcoded Windows `COPY` to C:\ProgramData\Lidarr\plugins\...,
+    which failed with MSB3073 (exit 127) on every non-Windows build. Using the
+    MSBuild Copy task instead of `Exec COPY` keeps it cross-platform.
+  -->
+  <Target Name="DeployPluginLocally" AfterTargets="ILRepacker" Condition="'$(QobuzPluginDeployPath)' != ''">
+    <MakeDir Directories="$(QobuzPluginDeployPath)" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(QobuzPluginDeployPath)" ContinueOnError="true" />
   </Target>
 
 </Project>

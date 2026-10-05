@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+
+    <!--
+      Opt out of the inherited Lidarr conventions from ext/Lidarr/src/Directory.Build.props.
+      This project is not a Lidarr project and not a plugin project, so it must not pick up
+      the _plugins output path, the StyleCop AdditionalFiles wiring, or TreatWarningsAsErrors.
+    -->
+    <LidarrProject>false</LidarrProject>
+    <PluginProject>false</PluginProject>
+    <EnableAnalyzers>false</EnableAnalyzers>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!--
+      Keep test binaries local rather than in Lidarr's centralized _tests folder.
+      Only the output path is overridden; BaseIntermediateOutputPath must be set before
+      Microsoft.Common.props is imported, so overriding it here would trigger MSB3539.
+    -->
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <!--
+    Versions deliberately match the Lidarr tree's own test stack
+    (ext/Lidarr/src/Directory.Build.props and NzbDrone.Test.Common) so the plugin
+    does not introduce a second, divergent test toolchain.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="5.1.0" />
+    <PackageReference Include="FluentAssertions" Version="5.10.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Lidarr.Plugin.Qobuz\Lidarr.Plugin.Qobuz.csproj" />
+  </ItemGroup>
+
+</Project>

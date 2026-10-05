@@ -10,8 +10,6 @@ using NzbDrone.Core.Indexers;
 using NzbDrone.Core.Localization;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Core.RemotePathMappings;
-using NzbDrone.Core.Validation;
-using NzbDrone.Plugin.Qobuz;
 
 namespace NzbDrone.Core.Download.Clients.Qobuz
 {
@@ -19,12 +17,13 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
     {
         private readonly IQobuzProxy _proxy;
 
-        public Qobuz(IQobuzProxy proxy,
-                      IConfigService configService,
-                      IDiskProvider diskProvider,
-                      IRemotePathMappingService remotePathMappingService,
-                      ILocalizationService localizationService,
-                      Logger logger)
+        public Qobuz(
+            IQobuzProxy proxy,
+            IConfigService configService,
+            IDiskProvider diskProvider,
+            IRemotePathMappingService remotePathMappingService,
+            ILocalizationService localizationService,
+            Logger logger)
             : base(configService, diskProvider, remotePathMappingService, localizationService, logger)
         {
             _proxy = proxy;
@@ -36,7 +35,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         public override IEnumerable<DownloadClientItem> GetItems()
         {
-            var queue = _proxy.GetQueue(Settings);
+            var queue = _proxy.GetQueue();
 
             foreach (var item in queue)
             {
@@ -49,14 +48,27 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         public override void RemoveItem(DownloadClientItem item, bool deleteData)
         {
             if (deleteData)
+            {
                 DeleteItemData(item);
+            }
 
-            _proxy.RemoveFromQueue(item.DownloadId, Settings);
+            _proxy.RemoveFromQueue(item.DownloadId);
         }
 
+        /// <summary>
+        /// Queues an album for download.
+        /// </summary>
+        /// <remarks>
+        /// <paramref name="indexer"/> is passed through because Qobuz credentials live in the
+        /// indexer's settings, not this client's. The previous implementation ignored it and
+        /// depended on a process-wide singleton that only the indexer's search path ever
+        /// initialised.
+        /// </remarks>
         public override Task<string> Download(RemoteAlbum remoteAlbum, IIndexer indexer)
         {
-            return _proxy.Download(remoteAlbum, Settings);
+            // Snapshot settings at the entry point: Lidarr reassigns Definition on this shared
+            // singleton, so a later read could belong to a different configured client.
+            return _proxy.Download(remoteAlbum, Settings, indexer);
         }
 
         public override DownloadClientInfo GetStatus()
@@ -64,13 +76,33 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
             return new DownloadClientInfo
             {
                 IsLocalhost = true,
-                OutputRootFolders = new() { new OsPath(Settings.DownloadPath) }
+                OutputRootFolders = new List<OsPath> { new OsPath(Settings.DownloadPath) }
             };
         }
 
+        /// <summary>
+        /// Verifies the configured download path is usable.
+        /// </summary>
+        /// <remarks>
+        /// Previously a no-op with the comment "we don't really need to do anything here", so
+        /// saving an unwritable or non-existent download path reported success and only failed
+        /// later, mid-download. Credentials are not checked here because they belong to the
+        /// indexer, which tests them itself.
+        /// </remarks>
         protected override void Test(List<ValidationFailure> failures)
         {
-            // given the way the code is setup, we don't really need to do anything here
+            var settings = Settings;
+
+            if (string.IsNullOrWhiteSpace(settings.DownloadPath))
+            {
+                failures.Add(new ValidationFailure(
+                    nameof(settings.DownloadPath),
+                    "A download path is required."));
+
+                return;
+            }
+
+            failures.AddIfNotNull(TestFolder(settings.DownloadPath, nameof(settings.DownloadPath)));
         }
     }
 }

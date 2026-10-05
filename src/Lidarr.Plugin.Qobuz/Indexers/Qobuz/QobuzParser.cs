@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NzbDrone.Common.Http;
 using NzbDrone.Core.Parser.Model;
@@ -10,120 +9,181 @@ using QobuzApiSharp.Models.Content;
 
 namespace NzbDrone.Core.Indexers.Qobuz
 {
+    /// <summary>
+    /// Turns a Qobuz album-search response into Lidarr releases, one per offered quality.
+    /// </summary>
     public class QobuzParser : IParseIndexerResponse
     {
-        public QobuzIndexerSettings Settings { get; set; }
-
         public IList<ReleaseInfo> ParseResponse(IndexerResponse response)
         {
-            var torrentInfos = new List<ReleaseInfo>();
             var content = new HttpResponse<SearchResult>(response.HttpResponse).Content;
 
-            var jsonResponse = JObject.Parse(content).ToObject<SearchResult>();
-            var releases = jsonResponse.Albums.Items.Select(result => ProcessAlbumResult(result)).ToArray();
+            var searchResult = JObject.Parse(content).ToObject<SearchResult>();
 
-            foreach (var task in releases)
+            // Every one of these can be absent: the library's models carry no nullable
+            // annotations, and an empty search simply omits the albums object.
+            var albums = searchResult?.Albums?.Items;
+
+            if (albums == null)
             {
-                torrentInfos.AddRange(task);
+                return Array.Empty<ReleaseInfo>();
             }
 
-            return torrentInfos
-                .OrderByDescending(o => o.Size)
-                .ToArray();
+            return albums
+                .Where(album => album != null)
+                .SelectMany(ToReleases)
+                .OrderByDescending(release => release.Size)
+                .ToList();
         }
 
-        private IEnumerable<ReleaseInfo> ProcessAlbumResult(Album result)
+        /// <summary>
+        /// Offers one release per quality this album can be streamed at.
+        /// </summary>
+        private static IEnumerable<ReleaseInfo> ToReleases(Album album)
         {
-            // determine available audio qualities
-            List<AudioQuality> qualityList = new() { AudioQuality.MP3320, AudioQuality.FLACLossless };
+            var qualities = new List<AudioQualitySpec>(AudioQualities.StandardTiers);
 
-            if ((result.Hires ?? false) && (result.HiresStreamable ?? false))
+            if ((album.Hires ?? false) && (album.HiresStreamable ?? false))
             {
-                qualityList.Add(AudioQuality.FLACHiRes24Bit192Khz);
-                qualityList.Add(AudioQuality.FLACHiRes24Bit96kHz);
+                // Qobuz advertises 192 kHz whenever hi-res exists and quietly serves 96 kHz
+                // when it does not, which cannot be detected without downloading.
+                qualities.AddRange(AudioQualities.HiResTiers);
             }
 
-            return qualityList.Select(q => ToReleaseInfo(result, q));
+            var metadata = QobuzReleaseMetadata.From(album);
+
+            return qualities.Select(quality => ToReleaseInfo(metadata, quality));
         }
 
-        private static ReleaseInfo ToReleaseInfo(Album x, AudioQuality bitrate)
+        private static ReleaseInfo ToReleaseInfo(QobuzReleaseMetadata album, AudioQualitySpec quality)
         {
-            var publishDate = DateTime.UtcNow;
-            var year = 0;
-            if (x.ReleaseDateOriginal != null)
+            var title = $"{album.Artist} - {album.Title}";
+
+            if (album.Year > 0)
             {
-                publishDate = x.ReleaseDateOriginal.Value.DateTime;
-                year = publishDate.Year;
+                title += $" ({album.Year})";
             }
 
-            var url = x.Url;
-
-            var result = new ReleaseInfo
+            if (album.IsExplicit)
             {
-                Guid = $"Qobuz-{x.Id}-{bitrate}",
-                Artist = x.Artist.Name,
-                Album = x.CompleteTitle,
-                DownloadUrl = url,
-                InfoUrl = url,
-                PublishDate = publishDate,
-                DownloadProtocol = nameof(QobuzDownloadProtocol)
+                title += " [Explicit]";
+            }
+
+            title += $" [{quality.DisplayLabel}] [WEB]";
+
+            return new ReleaseInfo
+            {
+                Guid = $"Qobuz-{album.Id}-{quality.Quality}",
+                Artist = album.Artist,
+                Album = album.Title,
+                Title = title,
+                DownloadUrl = album.Url,
+                InfoUrl = album.Url,
+                PublishDate = album.PublishDate,
+                DownloadProtocol = nameof(QobuzDownloadProtocol),
+                Codec = quality.Codec,
+
+                // Round-trips back to a quality in the download client, so it must stay in
+                // step with AudioQualities.TryFromContainer.
+                Container = quality.Container,
+
+                // Bytes. Qobuz exposes no cheap way to obtain a real size, so this is an
+                // estimate from duration and bitrate; the division by 8 inside EstimateBytes
+                // is what keeps it in bytes rather than bits.
+                Size = quality.EstimateBytes(album.DurationSeconds),
             };
+        }
 
-            string format;
-            switch (bitrate)
+        /// <summary>
+        /// The fields a release needs, read defensively out of the library's model once.
+        /// </summary>
+        private sealed class QobuzReleaseMetadata
+        {
+            private QobuzReleaseMetadata(
+                string id,
+                string title,
+                string artist,
+                string url,
+                DateTime publishDate,
+                int year,
+                long durationSeconds,
+                bool isExplicit)
             {
-                case AudioQuality.MP3320:
-                    result.Codec = "MP3";
-                    result.Container = "320";
-                    format = "MP3 320kbps";
-                    break;
-                case AudioQuality.FLACLossless:
-                    result.Codec = "FLAC";
-                    result.Container = "Lossless";
-                    format = "FLAC Lossless";
-                    break;
-                case AudioQuality.FLACHiRes24Bit96kHz:
-                    result.Codec = "FLAC";
-                    result.Container = "24bit 96kHz";
-                    format = "FLAC 24bit 96kHz";
-                    break;
-                case AudioQuality.FLACHiRes24Bit192Khz:
-                    result.Codec = "FLAC";
-                    result.Container = "24bit 192kHz";
-                    format = "FLAC 24bit 192kHz";
-                    break;
-                default:
-                    throw new NotImplementedException();
+                Id = id;
+                Title = title;
+                Artist = artist;
+                Url = url;
+                PublishDate = publishDate;
+                Year = year;
+                DurationSeconds = durationSeconds;
+                IsExplicit = isExplicit;
             }
 
-            // estimates as there isn't an efficient way to get sizes
-            var size = 0L;
-            var bps = bitrate switch
-            {
-                AudioQuality.MP3320 => 320000,
-                AudioQuality.FLACLossless => 1411200,
-                AudioQuality.FLACHiRes24Bit96kHz => 4608000,
-                AudioQuality.FLACHiRes24Bit192Khz => 9216000,
-                _ => 320000
-            };
-            size = x.Duration.Value * bps;
+            internal string Id { get; }
 
-            result.Size = size;
-            result.Title = $"{x.Artist.Name} - {x.CompleteTitle}";
+            internal string Title { get; }
 
-            if (year > 0)
+            internal string Artist { get; }
+
+            internal string Url { get; }
+
+            internal DateTime PublishDate { get; }
+
+            internal int Year { get; }
+
+            internal long DurationSeconds { get; }
+
+            internal bool IsExplicit { get; }
+
+            internal static QobuzReleaseMetadata From(Album album)
             {
-                result.Title += $" ({year})";
+                var publishDate = DateTime.UtcNow;
+                var year = 0;
+
+                if (album.ReleaseDateOriginal.HasValue)
+                {
+                    publishDate = album.ReleaseDateOriginal.Value.DateTime;
+                    year = publishDate.Year;
+                }
+
+                return new QobuzReleaseMetadata(
+                    id: album.Id ?? string.Empty,
+                    title: SafeTitle(album),
+                    artist: album.Artist?.Name?.Trim() ?? string.Empty,
+                    url: album.Url ?? string.Empty,
+                    publishDate: publishDate,
+                    year: year,
+                    durationSeconds: Math.Max(album.Duration.GetValueOrDefault(), 0),
+                    isExplicit: album.ParentalWarning.GetValueOrDefault());
             }
 
-            if (x.ParentalWarning.GetValueOrDefault())
+            /// <summary>
+            /// Reads the album title without tripping over <c>CompleteTitle</c>, which calls
+            /// <c>Title.Trim()</c> internally and throws when Qobuz omits a title.
+            /// </summary>
+            private static string SafeTitle(Album album)
             {
-                result.Title += " [Explicit]";
+                if (string.IsNullOrWhiteSpace(album.Title))
+                {
+                    return "Unknown Album";
+                }
+
+                try
+                {
+                    var complete = album.CompleteTitle;
+
+                    if (!string.IsNullOrWhiteSpace(complete))
+                    {
+                        return complete.Trim();
+                    }
+                }
+                catch (NullReferenceException)
+                {
+                    // Falls through to the plain title.
+                }
+
+                return album.Title!.Trim();
             }
-
-            result.Title += $" [{format}] [WEB]";
-
-            return result;
         }
     }
 }
