@@ -189,3 +189,29 @@ reference without disposing; the GC reclaims the session once the download still
 it finishes. Only `Dispose()` at process shutdown disposes eagerly. This is a good
 illustration of why the bounded-leak-versus-correctness trade has to be made
 deliberately rather than by reflex.
+
+## Correction to my own A9 claim (found in loop 1)
+
+I had written that throwing `QobuzAuthenticationException` from
+`GetRequestGenerator` means "the real reason reaches the log and the UI". Half of that
+was wrong, and I only found it by reading the host's catch chain properly.
+
+`HttpIndexerBase.TestConnection` has a long `catch` ladder
+(`HttpIndexerBase.cs:339-430`). Lidarr's own indexer exception types get their message
+surfaced — `IndexerException` yields `"Unable to connect to indexer. " + ex.Message`.
+Everything else hits the final `catch (Exception)` at `:423`, which returns a fixed
+`"Unable to connect to indexer, check the log for more details"` and **discards the
+message**. `QobuzAuthenticationException` derives from plain `Exception`, so the settings
+test showed the same unhelpful string as before. Deriving from `IndexerException` is not
+an option: it requires an `IndexerResponse`, which does not exist at credential-check
+time.
+
+Fix: `Qobuz` (indexer) now overrides `Test(List<ValidationFailure>)`. It checks the
+credential snapshot first, attempts a login, and on failure adds a `ValidationFailure`
+against the `Email` field carrying the real reason — which is the mechanism Lidarr
+actually renders in the UI — before deferring to `base.Test` for the live query. The
+throw from `GetRequestGenerator` still earns its place: it fixes the *search* path, where
+the old `return null` caused a host NRE and silently empty results.
+
+Lesson worth keeping: "I throw a descriptive exception" is not the same claim as "the
+user sees a descriptive message". The host decides.
