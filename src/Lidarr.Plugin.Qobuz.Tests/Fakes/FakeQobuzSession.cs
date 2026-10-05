@@ -182,17 +182,6 @@ namespace Lidarr.Plugin.Qobuz.Tests.Fakes
             return session;
         }
 
-        public bool TryGetExistingSession(QobuzCredentials credentials, out IQobuzSession? session)
-        {
-            if (_sessions.TryGetValue(credentials, out var found))
-            {
-                session = found;
-                return true;
-            }
-
-            session = null;
-            return false;
-        }
     }
 
     /// <summary>Builds plugin-owned metadata for tests.</summary>

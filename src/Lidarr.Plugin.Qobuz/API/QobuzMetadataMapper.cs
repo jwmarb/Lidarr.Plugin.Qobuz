@@ -134,7 +134,12 @@ namespace NzbDrone.Plugin.Qobuz.API
         /// <summary>
         /// Reads <c>Album.CompleteTitle</c> without risking the NRE it throws on a null title.
         /// </summary>
-        private static string SafeCompleteTitle(Album album)
+        /// <remarks>
+        /// Internal rather than private so the indexer parser shares this one implementation.
+        /// Two copies of null-safe title handling would have to agree forever, which is the
+        /// duplication this mapper exists to remove.
+        /// </remarks>
+        internal static string SafeCompleteTitle(Album album)
         {
             if (!string.IsNullOrWhiteSpace(album.Title))
             {

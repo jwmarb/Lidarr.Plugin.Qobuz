@@ -148,41 +148,13 @@ namespace NzbDrone.Core.Indexers.Qobuz
 
                 return new QobuzReleaseMetadata(
                     id: album.Id ?? string.Empty,
-                    title: SafeTitle(album),
+                    title: QobuzMetadataMapper.SafeCompleteTitle(album),
                     artist: album.Artist?.Name?.Trim() ?? string.Empty,
                     url: album.Url ?? string.Empty,
                     publishDate: publishDate,
                     year: year,
                     durationSeconds: Math.Max(album.Duration.GetValueOrDefault(), 0),
                     isExplicit: album.ParentalWarning.GetValueOrDefault());
-            }
-
-            /// <summary>
-            /// Reads the album title without tripping over <c>CompleteTitle</c>, which calls
-            /// <c>Title.Trim()</c> internally and throws when Qobuz omits a title.
-            /// </summary>
-            private static string SafeTitle(Album album)
-            {
-                if (string.IsNullOrWhiteSpace(album.Title))
-                {
-                    return "Unknown Album";
-                }
-
-                try
-                {
-                    var complete = album.CompleteTitle;
-
-                    if (!string.IsNullOrWhiteSpace(complete))
-                    {
-                        return complete.Trim();
-                    }
-                }
-                catch (NullReferenceException)
-                {
-                    // Falls through to the plain title.
-                }
-
-                return album.Title!.Trim();
             }
         }
     }

@@ -461,18 +461,6 @@ namespace NzbDrone.Plugin.Qobuz.API
             }
         }
 
-        public bool TryGetExistingSession(QobuzCredentials credentials, out IQobuzSession? session)
-        {
-            if (credentials != null && _sessions.TryGetValue(credentials, out var existing))
-            {
-                session = existing;
-                return true;
-            }
-
-            session = null;
-            return false;
-        }
-
         public void Dispose()
         {
             foreach (var session in _sessions.Values)

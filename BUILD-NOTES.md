@@ -77,6 +77,28 @@ submodule warnings; the plugin's own 7 are gone. Original list:
 - `CS0672` / `SYSLIB0051` — obsolete serialization members inside the
   **QobuzApiSharp submodule**. Not ours.
 
+## The test project runs against the ILRepack-merged assembly
+
+A constraint worth knowing before writing tests, because it costs an hour to rediscover.
+
+`ILRepack.targets` merges `QobuzApiSharp`, `Newtonsoft.Json` and `TagLibSharp` into
+`Lidarr.Plugin.Qobuz.dll` with `Internalize="true"`, and the test project's
+`ProjectReference` copies that **merged** DLL into its own `bin`. So at runtime the
+library's types are `internal`.
+
+Consequence: a test whose method signature mentions a merged type — e.g.
+`QobuzApiSharp.Models.Content.Album` — compiles fine but fails at runtime with
+`MissingMethodException`, because the signature cannot bind against the internalised type.
+`InternalsVisibleTo` does not help; the problem is the parameter type, not the member's
+accessibility.
+
+This is the seam doing its job. The library's vocabulary is supposed to stop at
+`QobuzMetadataMapper`, and tests are supposed to speak `IQobuzSession` and the
+plugin-owned record types instead — which the fake session makes easy. If you ever need
+to unit-test the mapper directly against real library models, the only clean options are
+a separate non-merged test target or dropping `Internalize`, and neither is worth
+changing the shipped artifact for.
+
 ## No test infrastructure
 
 There is no test project in this repo and no `dotnet test` target. "Verification"

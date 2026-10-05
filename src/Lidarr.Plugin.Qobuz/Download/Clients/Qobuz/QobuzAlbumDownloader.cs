@@ -26,8 +26,6 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         public string? Synced { get; }
 
-        public bool HasAny => !string.IsNullOrWhiteSpace(Plain) || !string.IsNullOrWhiteSpace(Synced);
-
         public static TrackLyrics None { get; } = new TrackLyrics(null, null);
     }
 

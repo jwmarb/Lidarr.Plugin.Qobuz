@@ -345,11 +345,6 @@ namespace NzbDrone.Plugin.Qobuz.API
         /// The credentials are incomplete or Qobuz rejected them.
         /// </exception>
         IQobuzSession GetSession(QobuzCredentials credentials);
-
-        /// <summary>
-        /// Returns the existing session for these credentials without attempting a login.
-        /// </summary>
-        bool TryGetExistingSession(QobuzCredentials credentials, out IQobuzSession? session);
     }
 
     /// <summary>Base type for Qobuz failures the plugin raises deliberately.</summary>
