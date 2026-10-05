@@ -17,7 +17,7 @@ dotnet test  src/Lidarr.Plugin.Qobuz.Tests/Lidarr.Plugin.Qobuz.Tests.csproj -p:N
 
 Baseline before any change: build succeeded, 14 warnings, 0 errors, 0 tests.
 Current: build succeeded, **0 errors**, **0 warnings from `src/`** (7 from the
-`ext/QobuzApiSharp` submodule on a clean build — see BUILD-NOTES.md), **143 tests passing**.
+`ext/QobuzApiSharp` submodule on a clean build — see BUILD-NOTES.md), **144 tests passing**.
 
 ## Independently re-verified 2026-10-04 (after the implementation commits)
 
@@ -215,3 +215,38 @@ the old `return null` caused a host NRE and silently empty results.
 
 Lesson worth keeping: "I throw a descriptive exception" is not the same claim as "the
 user sees a descriptive message". The host decides.
+
+## Open item (the only one)
+
+**Reviewer `sub-cf0e` has not reported yet.** It has been running a long time; I sent it a
+delta describing everything I fixed on my own so it does not re-derive those, and asked
+for a partial report ordered by severity. Its findings still need to be read and acted on
+before this work can be called finished. Everything else in this plan is done and
+verified.
+
+## Defects I found in my own new code, after the implementation was "done"
+
+Recorded because the pattern matters more than the list: every one of these was in code I
+had already declared working, with a green build and a green suite.
+
+| # | Defect | How it surfaced |
+|---|---|---|
+| 1 | Byte progress double-counted (`Progress<T>` dispatches async) | my own new test failed |
+| 2 | Filename sanitising was platform-dependent (`GetInvalidFileNameChars` returns only NUL and `/` on Linux) | my own new test failed |
+| 3 | `QobuzAlbumDownloadPlan` allowed an empty track list while a caller indexed `Tracks[0]` | self-audit |
+| 4 | `Dispose` disposed primitives the worker was still using after a timed-out wait | self-audit |
+| 5 | Pointless `Volatile.Read` on a write-once field | self-audit |
+| 6 | Session cache never evicted (resource leak) | self-audit |
+| 7 | My own fix for 6 introduced a **use-after-dispose** across a live download | re-reading my own diff |
+| 8 | `TryFromContainer` left `MP3320` in its `out` on failure | verifier flagged it as a latent trap |
+| 9 | Claimed "0 warnings" from an incremental build; a clean build shows 7 | verifier corrected me |
+| 10 | Dead surface: `TrackLyrics.HasAny`, `TryGetExistingSession` | self-audit, deletion test |
+| 11 | `QobuzParser` duplicated the mapper's null-safe title reader | self-audit |
+| 12 | `QobuzAuthenticationException` message was discarded by the host, so A9 did not actually improve the UI message | reading the host's catch ladder |
+| 13 | ETA cache leaked on the `Warning` status I introduced | auditing the ETA arithmetic |
+
+Two lessons worth carrying forward:
+- A green build and a green suite are necessary, not sufficient. Six of these were found
+  only by re-reading the code with fresh suspicion.
+- Fixing a leak by reflex created a worse correctness bug (7). Trade bounded resource
+  waste for correctness deliberately, not automatically.
