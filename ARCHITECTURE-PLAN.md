@@ -302,3 +302,33 @@ Two lessons worth carrying forward:
   only by re-reading the code with fresh suspicion.
 - Fixing a leak by reflex created a worse correctness bug (7). Trade bounded resource
   waste for correctness deliberately, not automatically.
+
+## Host-integration contracts, verified by reflection on the shipped assembly
+
+The refactor moved or rewrote every type Lidarr has to discover, so I checked discovery
+itself rather than assuming it survived. A throwaway probe (in `/tmp`, since deleted)
+loaded the ILRepack-merged `Lidarr.Plugin.Qobuz.dll` and enumerated exported types:
+
+| Contract | Implementations found |
+|---|---|
+| `IIndexer` | 1 — `Indexers.Qobuz.Qobuz` |
+| `IDownloadClient` | 1 — `Download.Clients.Qobuz.Qobuz` |
+| `IDownloadProtocol` | 1 — `QobuzDownloadProtocol` |
+| `IBlocklistForProtocol` | 1 — `QobuzBlocklist` |
+| `Plugin` | 1 — `QobuzPlugin` |
+| `IHandle<ApplicationShutdownRequested>` | 1 — `QobuzProxy` |
+
+The shutdown hook mattered most, because the reviewer's point was that the queue's
+shutdown logic was unreachable without it. I traced the host's mechanism to
+`EventAggregator` → `ServiceFactory.BuildAll<IHandle<TEvent>>()` →
+`_container.GetServices<T>()`, which is container-based and therefore includes plugin
+assemblies, and `LifecycleService.Shutdown` publishes the event on a real shutdown. The
+probe then confirmed on the shipped DLL that `QobuzProxy` is public, implements the exact
+closed generic, and exposes a public `Handle(ApplicationShutdownRequested)`. So the hook is
+genuinely wired, not merely plausible.
+
+Also confirmed the protocol name cannot drift: all three places that declare it
+(`Indexers/Qobuz/Qobuz.cs:34`, `Download/Clients/Qobuz/Qobuz.cs:32`,
+`Blocklisting/QobuzBlocklist.cs:21`) use `nameof(QobuzDownloadProtocol)` rather than a
+string literal, and Lidarr matches download clients to indexers on that string
+(`DownloadClientProvider.cs:46`).
