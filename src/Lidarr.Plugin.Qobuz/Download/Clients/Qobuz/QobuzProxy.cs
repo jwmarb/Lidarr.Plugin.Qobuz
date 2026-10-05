@@ -255,8 +255,13 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         private TimeSpan? GetRemainingTime(DownloadProgressSnapshot snapshot)
         {
-            if (snapshot.Status == DownloadItemStatus.Completed
-                || snapshot.Status == DownloadItemStatus.Failed)
+            // Every terminal status must clear the cache entry, including Warning. Warning is
+            // this plugin's partial-album outcome, so omitting it both leaked an entry per
+            // partially-failed album for the process lifetime and kept reporting an ETA for
+            // work that had already stopped.
+            if (snapshot.Status is DownloadItemStatus.Completed
+                or DownloadItemStatus.Failed
+                or DownloadItemStatus.Warning)
             {
                 _startTimeCache.Remove(snapshot.DownloadId);
                 return null;

@@ -99,6 +99,25 @@ namespace Lidarr.Plugin.Qobuz.Tests
                 .Progress.Should().BeApproximately(0.25, 0.0001);
         }
 
+        /// <summary>
+        /// Warning is this plugin's partial-album outcome and is terminal, so it must behave
+        /// like one: no outstanding work, and nothing left in the ETA cache.
+        /// </summary>
+        [Test]
+        public void A_partial_album_is_terminal_for_reporting_purposes()
+        {
+            var snapshot = Snapshot(
+                status: DownloadItemStatus.Warning,
+                estimatedTotalBytes: 5000,
+                downloadedBytes: 3000,
+                completedTracks: 8,
+                failedTracks: 2);
+
+            snapshot.Status.Should().Be(DownloadItemStatus.Warning);
+            snapshot.CompletedTracks.Should().Be(8);
+            snapshot.FailedTracks.Should().Be(2);
+        }
+
         [Test]
         public void A_failed_download_still_reports_what_it_managed()
         {
