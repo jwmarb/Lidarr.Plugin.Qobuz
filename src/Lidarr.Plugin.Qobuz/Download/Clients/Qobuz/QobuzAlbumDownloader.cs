@@ -388,18 +388,10 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
             var fileName = TrackPathTemplate.Render(TrackPathTemplate.TrackFile, fields);
             var trackPath = Path.Combine(outputDirectory, fileName);
 
-            long lastReported = 0;
-
-            var progress = new Progress<long>(bytesSoFar =>
-            {
-                var delta = bytesSoFar - lastReported;
-
-                if (delta > 0)
-                {
-                    lastReported = bytesSoFar;
-                    reportDelta(delta);
-                }
-            });
+            // Deliberately not Progress<long>: that type marshals its callbacks onto the
+            // captured context asynchronously, so two reports for the same track can run
+            // concurrently and out of order, and the read-modify-write below double-counts.
+            var progress = new MonotonicDeltaProgress(reportDelta);
 
             var written = await _session
                 .DownloadTrackAsync(track.Id, spec.Quality, trackPath, progress, cancellationToken)
@@ -426,6 +418,45 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
             }
 
             return written;
+        }
+
+        /// <summary>
+        /// Converts a stream of running totals into non-overlapping deltas.
+        /// </summary>
+        /// <remarks>
+        /// Reports synchronously on the calling thread and under a lock, so deltas are exact
+        /// even when several tracks transfer at once. Out-of-order or repeated totals yield no
+        /// delta rather than a negative one.
+        /// </remarks>
+        private sealed class MonotonicDeltaProgress : IProgress<long>
+        {
+            private readonly Action<long> _reportDelta;
+            private readonly object _gate = new();
+            private long _highWaterMark;
+
+            internal MonotonicDeltaProgress(Action<long> reportDelta)
+            {
+                _reportDelta = reportDelta;
+            }
+
+            public void Report(long totalBytesSoFar)
+            {
+                long delta;
+
+                lock (_gate)
+                {
+                    delta = totalBytesSoFar - _highWaterMark;
+
+                    if (delta <= 0)
+                    {
+                        return;
+                    }
+
+                    _highWaterMark = totalBytesSoFar;
+                }
+
+                _reportDelta(delta);
+            }
         }
 
         private static async Task WriteLrcFileAsync(

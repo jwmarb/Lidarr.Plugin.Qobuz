@@ -94,7 +94,36 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         /// <summary>The track filename layout, within the album folder.</summary>
         public const string TrackFile = "%volume% - %track% - %title%.%ext%";
 
-        private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+        /// <summary>
+        /// Characters never allowed in a rendered path segment.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately wider than <see cref="Path.GetInvalidFileNameChars"/>, which on Linux
+        /// reports only NUL and '/'. A music library is routinely moved or shared between
+        /// Linux, Windows and macOS, so names are kept portable: the Windows-reserved set and
+        /// all C0 control characters are replaced everywhere, not just where the host happens
+        /// to reject them.
+        /// </remarks>
+        private static readonly char[] InvalidFileNameChars = BuildInvalidChars();
+
+        private static char[] BuildInvalidChars()
+        {
+            var invalid = new HashSet<char>(Path.GetInvalidFileNameChars());
+
+            // Reserved on Windows, legal on Linux.
+            foreach (var c in new[] { '<', '>', ':', '"', '/', '\\', '|', '?', '*' })
+            {
+                invalid.Add(c);
+            }
+
+            // Control characters: legal on Linux, but they corrupt playlists, logs and shells.
+            for (var c = (char)0; c < (char)32; c++)
+            {
+                invalid.Add(c);
+            }
+
+            return invalid.ToArray();
+        }
 
         /// <summary>
         /// Substitutes every placeholder in <paramref name="template"/>, sanitising each
