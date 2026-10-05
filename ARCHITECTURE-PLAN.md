@@ -16,7 +16,37 @@ dotnet test  src/Lidarr.Plugin.Qobuz.Tests/Lidarr.Plugin.Qobuz.Tests.csproj -p:N
 ```
 
 Baseline before any change: build succeeded, 14 warnings, 0 errors, 0 tests.
-Current: build succeeded, **0 warnings**, 0 errors, **52 tests passing**.
+Current: build succeeded, **0 warnings**, 0 errors, **120 tests passing**.
+
+## Independently re-verified 2026-10-04 (after the implementation commits)
+
+Not trusting the earlier in-flight runs, this was all re-checked from scratch:
+
+- **Clean rebuild** (`_temp`, `_plugins`, test `obj`/`bin` deleted first): 0 errors,
+  0 warnings, and the ILRepack-merged assembly is produced at
+  `_plugins/net8.0/Lidarr.Plugin.Qobuz/Lidarr.Plugin.Qobuz.dll`.
+- **Test stability**: 120/120 passed on 5 consecutive runs. Several queue tests are
+  timing-sensitive (bounded concurrency, shutdown cancellation), so repetition was
+  the point; no flakiness observed.
+- **Deleted types leave no references**: `QobuzAPI`, `QobuzURL`, `MetadataUtilities`,
+  `DownloadItem` all return 0 hits under `src/` (excluding the unrelated
+  `DownloadItemStatus` enum, which is a host type).
+- **No stray imports or foreign paths**: `Npgsql` gone from source; the only
+  remaining `C:\ProgramData` occurrence is prose inside a csproj comment
+  explaining what was removed.
+- **Secret handling proven by execution**, not by reading. A throwaway probe was
+  compiled against the *shipped merged assembly* in `/tmp` (since deleted) with
+  deliberately distinctive secrets. Results:
+  - `QobuzCredentials.ToString()` → `QobuzCredentials(email login)`; none of the
+    password hash, auth token, or app secret appears, including via the string
+    interpolation NLog's `{0}` performs. This matters because
+    `QobuzSession.cs:463` logs a credentials object at Debug.
+  - `Equals`/`GetHashCode` agree for identical credentials and differ when the
+    password differs — the invariant `QobuzSessionProvider`'s session cache keys on.
+  - `IsComplete` is true for an email login and false for empty credentials.
+  - `AudioQualities.For(FLACLossless).EstimateBytes(600)` = **105,840,000**, i.e.
+    bytes not bits, confirming the 8x over-reporting bug is genuinely fixed in the
+    artifact that actually ships.
 
 ## Status
 
