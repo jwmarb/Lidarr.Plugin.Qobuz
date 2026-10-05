@@ -41,7 +41,7 @@ namespace NzbDrone.Plugin.Qobuz.API
         private readonly Logger _logger;
         private readonly object _apiLock = new();
 
-        private string _authToken;
+        private readonly string _authToken;
         private bool _disposed;
 
         internal QobuzSession(
@@ -62,7 +62,16 @@ namespace NzbDrone.Plugin.Qobuz.API
 
         public string AppId => _client.AppId ?? string.Empty;
 
-        public string AuthToken => Volatile.Read(ref _authToken!) ?? string.Empty;
+        /// <summary>
+        /// The auth token obtained at login.
+        /// </summary>
+        /// <remarks>
+        /// Immutable for the life of the session. A session owns exactly one API client and
+        /// logs in once; re-authenticating creates a new session rather than mutating this one,
+        /// which is what keeps the library's unsynchronized <c>UserAuthToken</c> from being
+        /// written while in-flight requests are reading it.
+        /// </remarks>
+        public string AuthToken => _authToken;
 
         public string BuildApiUrl(string method, IReadOnlyDictionary<string, string>? parameters = null)
         {
@@ -396,8 +405,52 @@ namespace NzbDrone.Plugin.Qobuz.API
                 }
 
                 var session = CreateAndAuthenticate(credentials);
+
+                // Each session owns an HttpClient and a QobuzApiService, so superseded ones
+                // are retired rather than accumulated. Without this, every credential edit
+                // leaks a logged-in session for the rest of the process lifetime.
+                RetireSupersededSessions();
+
                 _sessions[credentials] = session;
                 return session;
+            }
+        }
+
+        /// <summary>
+        /// Disposes cached sessions beyond the most recent few.
+        /// </summary>
+        /// <remarks>
+        /// Called under <see cref="_loginLock"/>. A small number is kept rather than exactly
+        /// one, because a Lidarr instance may legitimately have several Qobuz indexers
+        /// configured with different accounts.
+        /// </remarks>
+        private void RetireSupersededSessions()
+        {
+            const int MaxCachedSessions = 4;
+
+            if (_sessions.Count < MaxCachedSessions)
+            {
+                return;
+            }
+
+            foreach (var key in _sessions.Keys.ToList())
+            {
+                if (_sessions.Count < MaxCachedSessions)
+                {
+                    break;
+                }
+
+                if (_sessions.TryRemove(key, out var retired))
+                {
+                    try
+                    {
+                        retired.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Debug(ex, "Error disposing a superseded Qobuz session.");
+                    }
+                }
             }
         }
 

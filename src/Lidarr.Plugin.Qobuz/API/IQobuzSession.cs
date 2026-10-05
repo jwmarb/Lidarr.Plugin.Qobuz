@@ -234,12 +234,24 @@ namespace NzbDrone.Plugin.Qobuz.API
             QobuzAlbumMetadata album,
             IReadOnlyList<QobuzTrackMetadata> tracks)
         {
-            Album = album;
-            Tracks = tracks;
+            Album = album ?? throw new ArgumentNullException(nameof(album));
+            Tracks = tracks ?? throw new ArgumentNullException(nameof(tracks));
+
+            // An album with no tracks is not downloadable, and callers index Tracks[0] to
+            // resolve the output directory. Enforcing the invariant here means a malformed
+            // plan fails at construction with an explanation, rather than throwing
+            // IndexOutOfRangeException deep inside the download.
+            if (tracks.Count == 0)
+            {
+                throw new ArgumentException(
+                    "An album download plan must contain at least one track.",
+                    nameof(tracks));
+            }
         }
 
         public QobuzAlbumMetadata Album { get; }
 
+        /// <summary>The album's tracks, in order. Never empty.</summary>
         public IReadOnlyList<QobuzTrackMetadata> Tracks { get; }
     }
 

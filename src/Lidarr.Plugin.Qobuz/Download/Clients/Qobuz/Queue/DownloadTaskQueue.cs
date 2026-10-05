@@ -191,13 +191,17 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                 _logger.Debug(ex, "Error signalling Qobuz queue shutdown.");
             }
 
+            var workerStopped = false;
+
             try
             {
                 // Bounded so a wedged download cannot hang Lidarr's shutdown indefinitely.
-                _worker?.Wait(TimeSpan.FromSeconds(10));
+                workerStopped = _worker == null || _worker.Wait(TimeSpan.FromSeconds(10));
             }
             catch (Exception ex)
             {
+                // A faulted worker still counts as stopped: nothing is using the primitives.
+                workerStopped = _worker?.IsCompleted ?? true;
                 _logger.Debug(ex, "Qobuz queue worker did not stop cleanly.");
             }
 
@@ -215,8 +219,22 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                 entry.Dispose();
             }
 
-            _shutdown.Dispose();
-            _concurrency.Dispose();
+            // Only dispose the primitives once nothing can still be using them. If the worker
+            // overran its shutdown budget it is still touching _shutdown and _concurrency, and
+            // disposing them underneath it would raise ObjectDisposedException on a background
+            // thread during host shutdown. Leaking two handles for the remaining process
+            // lifetime is the lesser evil.
+            if (workerStopped)
+            {
+                _shutdown.Dispose();
+                _concurrency.Dispose();
+            }
+            else
+            {
+                _logger.Warn(
+                    "The Qobuz download queue did not stop within 10s; leaving its "
+                    + "cancellation handles alive to avoid faulting the in-flight worker.");
+            }
         }
 
         private async Task ProcessQueueAsync(CancellationToken shutdownToken)
