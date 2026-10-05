@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -283,17 +285,6 @@ namespace NzbDrone.Plugin.Qobuz.API
         string AuthToken { get; }
 
         /// <summary>
-        /// Builds a signed URL for a Qobuz API method, for handing to Lidarr's own HTTP
-        /// pipeline.
-        /// </summary>
-        /// <remarks>
-        /// The library performs its own HTTP and cannot hand back a request, but Lidarr's
-        /// indexer pipeline requires a URL plus headers that it executes itself. So search
-        /// cannot simply delegate to the library's search method.
-        /// </remarks>
-        string BuildApiUrl(string method, IReadOnlyDictionary<string, string>? parameters = null);
-
-        /// <summary>
         /// Loads an album and its tracks in a single call.
         /// </summary>
         /// <exception cref="QobuzApiException">Qobuz rejected the request.</exception>
@@ -303,8 +294,8 @@ namespace NzbDrone.Plugin.Qobuz.API
         /// Downloads one track's media to <paramref name="destinationPath"/>.
         /// </summary>
         /// <param name="progress">
-        /// Invoked with the number of bytes written so far, so callers can report real byte
-        /// progress rather than a track count.
+        /// Invoked with the number of bytes written by each chunk, not a running total, so a
+        /// caller can simply sum them. Reported from a single thread per call, in order.
         /// </param>
         /// <returns>The number of bytes written.</returns>
         /// <exception cref="QobuzQualityUnavailableException">
@@ -325,6 +316,49 @@ namespace NzbDrone.Plugin.Qobuz.API
         Task<byte[]?> TryGetCoverArtAsync(
             QobuzAlbumMetadata album,
             CancellationToken cancellationToken = default);
+    }
+
+    /// <summary>
+    /// Builds Qobuz API URLs for Lidarr's own HTTP pipeline to execute.
+    /// </summary>
+    /// <remarks>
+    /// A pure function of its arguments, so it is deliberately not a session member: putting
+    /// it on <see cref="IQobuzSession"/> forced every fake to reimplement production string
+    /// building, which is the one thing a fake should never do. The library performs its own
+    /// HTTP and cannot hand back a request, while Lidarr's indexer pipeline needs a URL plus
+    /// headers it executes itself — hence building one here rather than calling the library's
+    /// search method.
+    /// </remarks>
+    public static class QobuzApiUrl
+    {
+        private const string BaseUrl = "https://www.qobuz.com/api.json/0.2";
+
+        public static string For(string method, IReadOnlyDictionary<string, string>? parameters = null)
+        {
+            if (string.IsNullOrWhiteSpace(method))
+            {
+                throw new ArgumentException("An API method is required.", nameof(method));
+            }
+
+            var builder = new StringBuilder(BaseUrl);
+            builder.Append(method);
+
+            if (parameters is { Count: > 0 })
+            {
+                var first = true;
+
+                foreach (var pair in parameters)
+                {
+                    builder.Append(first ? '?' : '&');
+                    builder.Append(WebUtility.UrlEncode(pair.Key));
+                    builder.Append('=');
+                    builder.Append(WebUtility.UrlEncode(pair.Value));
+                    first = false;
+                }
+            }
+
+            return builder.ToString();
+        }
     }
 
     /// <summary>

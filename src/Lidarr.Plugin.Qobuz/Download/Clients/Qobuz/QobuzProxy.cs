@@ -163,13 +163,17 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
                 .DownloadAsync(plan, job.Request, new JobProgressObserver(job), cancellationToken)
                 .ConfigureAwait(false);
 
+            if (result.IsCompleteSuccess)
+            {
+                return AlbumDownloadOutcome.Success();
+            }
+
             if (result.DownloadedTracks == 0)
             {
                 return AlbumDownloadOutcome.Failure(
                     $"No tracks could be downloaded for {job.Title}.");
             }
 
-            if (result.FailedTracks > 0)
             {
                 // Reported as Failed, not Warning. Lidarr ignores Warning entirely for
                 // terminal items: CompletedDownloadService.Check returns unless the status is
@@ -184,8 +188,6 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
                     $"Only {result.DownloadedTracks} of {plan.Tracks.Count} tracks downloaded "
                     + $"for {job.Title}; {result.FailedTracks} failed.");
             }
-
-            return AlbumDownloadOutcome.Success();
         }
 
         /// <summary>

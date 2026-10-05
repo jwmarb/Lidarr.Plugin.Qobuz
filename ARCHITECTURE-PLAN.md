@@ -17,7 +17,7 @@ dotnet test  src/Lidarr.Plugin.Qobuz.Tests/Lidarr.Plugin.Qobuz.Tests.csproj -p:N
 
 Baseline before any change: build succeeded, 14 warnings, 0 errors, 0 tests.
 Current: build succeeded, **0 errors**, **0 warnings from `src/`** (7 from the
-`ext/QobuzApiSharp` submodule on a clean build — see BUILD-NOTES.md), **144 tests passing**.
+`ext/QobuzApiSharp` submodule on a clean build — see BUILD-NOTES.md), **163 tests passing**.
 
 ## Independently re-verified 2026-10-04 (after the implementation commits)
 
@@ -332,3 +332,58 @@ Also confirmed the protocol name cannot drift: all three places that declare it
 `Blocklisting/QobuzBlocklist.cs:21`) use `nameof(QobuzDownloadProtocol)` rather than a
 string literal, and Lidarr matches download clients to indexers on that string
 (`DownloadClientProvider.cs:46`).
+
+## Second reviewer (sub-62da) — findings and what I did
+
+I launched a second, tightly-scoped reviewer when the first appeared wedged. It was worth
+it: it independently found the `.part` collision I had just fixed (good corroboration) and
+one thing I had measured *wrongly*.
+
+**`HttpClient.Timeout` does not bound a body read.** It claimed this and I verified it
+myself: against a server that sends headers immediately and then dribbles one byte per
+500ms, a client with `Timeout = 3s` **completed normally after 9.5s**. With
+`HttpCompletionOption.ResponseHeadersRead` the timeout covers the header exchange only.
+That matters here because a stalled transfer holds a track permit in the downloader *and*
+an album permit in the queue, so three stalls wedge the single worker with no recovery.
+`CopyToFileAsync` now bounds each individual read with a linked CTS and a 60s stall
+timeout, and reports the stall as a `QobuzApiException` rather than hanging.
+
+**Where it was wrong, and I only know because I checked.** It rated truncation detection
+Critical, arguing a clean mid-body close ends the read loop silently. I built that exact
+case — declared `Content-Length: 4096`, sent 1000 bytes, clean FIN — and .NET 8 raises
+`HttpIOException`; a reset raises `IOException`. So the transport already surfaces it. I
+kept the length comparison as cheap defence in depth and labelled it honestly in the code
+rather than claiming a fix for a bug that does not exist.
+
+**Also fixed from its report:**
+- `Dispose` disposed the sealed library client *without* `_apiLock`, the one place the lock
+  most matters, and `_disposed` was a non-atomic check-then-set. Both now under the lock.
+- `QobuzSessionProvider` had no `IHandle<ApplicationShutdownRequested>`, so its `Dispose`
+  was unreachable — which also undermined the eviction policy's premise that shutdown
+  disposes sessions eagerly. Added; verified by reflection that **both** handlers are
+  discoverable on the shipped assembly.
+- `AppId` read library state outside `_apiLock`. Now consistent.
+
+**Three cuts it recommended, all taken after verifying each was safe:**
+- `MonotonicDeltaProgress` (~35 lines + a lock) guarded against out-of-order progress
+  reports that its only producer cannot emit — a single-threaded loop reporting a strictly
+  increasing total. The session now reports per-chunk deltas and a 15-line `ChunkProgress`
+  replaces it. This change *broke two tests*, which was the useful part: it proved the
+  suite actually verifies the progress contract rather than echoing it.
+- `BuildApiUrl`/`AppId`/`AuthToken` existed on `IQobuzSession` only so the indexer could
+  hand-roll HTTP, and forced `FakeQobuzSession` to reimplement production string building —
+  the one thing a fake must never do. `BuildApiUrl` is now a static `QobuzApiUrl.For`; the
+  fake's duplicate is deleted.
+- `AlbumDownloadResult.IsCompleteSuccess` was used only by tests while the proxy
+  hand-rolled the same predicate. The proxy now uses it.
+
+**Its one finding I declined:** filtering `catch (OperationCanceledException)` in
+`RunJobAsync` on `linked.Token.IsCancellationRequested`. It conceded it could not construct
+a live path, and I traced the same candidates to the same conclusion — per-track timeouts
+surface as `TaskCanceledException` and are already counted as failed tracks. Adding a
+branch for an unreachable case is speculative.
+
+It confirmed the `SemaphoreSlim` + `Task.WhenAll` shape I was unsure about is correct:
+`WhenAll` waits for every task to reach a terminal state before `using` disposes the
+semaphore, and a task cancelled inside `WaitAsync` never enters the `try` so never
+releases. Nothing to change.

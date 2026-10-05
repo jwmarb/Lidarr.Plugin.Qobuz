@@ -9,6 +9,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using NLog;
+using NzbDrone.Core.Lifecycle;
+using NzbDrone.Core.Messaging.Events;
 using QobuzApiSharp.Models.Content;
 using QobuzApiSharp.Service;
 
@@ -34,7 +36,14 @@ namespace NzbDrone.Plugin.Qobuz.API
     /// </remarks>
     public sealed class QobuzSession : IQobuzSession
     {
-        private const string ApiBaseUrl = "https://www.qobuz.com/api.json/0.2";
+        /// <summary>
+        /// How long a media transfer may make no progress before it is abandoned.
+        /// </summary>
+        /// <remarks>
+        /// Generous, because a legitimately slow connection must not be killed; the point is
+        /// only to bound a peer that has stopped sending entirely.
+        /// </remarks>
+        internal static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(60);
 
         private readonly QobuzApiService _client;
         private readonly HttpClient _httpClient;
@@ -60,7 +69,23 @@ namespace NzbDrone.Plugin.Qobuz.API
 
         public QobuzCredentials Credentials { get; }
 
-        public string AppId => _client.AppId ?? string.Empty;
+        /// <summary>The Qobuz app id in use.</summary>
+        /// <remarks>
+        /// Read under <see cref="_apiLock"/> for consistency with every other access to the
+        /// library client. The value is set during construction and never mutated, so this is
+        /// discipline rather than necessity — but an exception to the rule is how the rule
+        /// stops being followed.
+        /// </remarks>
+        public string AppId
+        {
+            get
+            {
+                lock (_apiLock)
+                {
+                    return _client.AppId ?? string.Empty;
+                }
+            }
+        }
 
         /// <summary>
         /// The auth token obtained at login.
@@ -72,33 +97,6 @@ namespace NzbDrone.Plugin.Qobuz.API
         /// written while in-flight requests are reading it.
         /// </remarks>
         public string AuthToken => _authToken;
-
-        public string BuildApiUrl(string method, IReadOnlyDictionary<string, string>? parameters = null)
-        {
-            if (string.IsNullOrWhiteSpace(method))
-            {
-                throw new ArgumentException("An API method is required.", nameof(method));
-            }
-
-            var builder = new StringBuilder(ApiBaseUrl);
-            builder.Append(method);
-
-            if (parameters is { Count: > 0 })
-            {
-                var first = true;
-
-                foreach (var pair in parameters)
-                {
-                    builder.Append(first ? '?' : '&');
-                    builder.Append(WebUtility.UrlEncode(pair.Key));
-                    builder.Append('=');
-                    builder.Append(WebUtility.UrlEncode(pair.Value));
-                    first = false;
-                }
-            }
-
-            return builder.ToString();
-        }
 
         public QobuzAlbumDownloadPlan GetAlbumDownloadPlan(string albumId)
         {
@@ -234,22 +232,33 @@ namespace NzbDrone.Plugin.Qobuz.API
 
         public void Dispose()
         {
-            if (_disposed)
+            // Taken under _apiLock so the sealed library client cannot be disposed while a
+            // blocking GetAlbum/GetTrackFileUrl call is inside it. That client has no internal
+            // synchronisation at all, which is the whole reason _apiLock exists, so skipping
+            // it here would leave a hole at the one point where it matters most. The flag is
+            // also set under the lock, so two concurrent Dispose calls cannot both pass the
+            // check and double-dispose.
+            lock (_apiLock)
             {
-                return;
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+
+                try
+                {
+                    _client.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.Debug(ex, "Ignoring error while disposing the Qobuz API client.");
+                }
             }
 
-            _disposed = true;
-
-            try
-            {
-                _client.Dispose();
-            }
-            catch (Exception ex)
-            {
-                _logger.Debug(ex, "Ignoring error while disposing the Qobuz API client.");
-            }
-
+            // Outside the lock: this client is ours, is thread-safe, and media transfers run
+            // concurrently by design, so holding the API lock across it would serialise them.
             _httpClient.Dispose();
         }
 
@@ -330,14 +339,44 @@ namespace NzbDrone.Plugin.Qobuz.API
 
             var buffer = new byte[81920];
             long total = 0;
-            int read;
 
-            while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            while (true)
             {
+                // HttpClient.Timeout does not bound a body read taken with
+                // ResponseHeadersRead: measured against a server dribbling one byte per
+                // 500ms, a 3s timeout still let the read run 9.5s to completion. Without a
+                // bound here a stalled peer holds both a track permit in the album downloader
+                // and an album permit in the queue, so three stalls wedge the single queue
+                // worker permanently with no recovery short of the user cancelling.
+                using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                idle.CancelAfter(StallTimeout);
+
+                int read;
+
+                try
+                {
+                    read = await source.ReadAsync(buffer, idle.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The idle bound fired rather than the caller cancelling.
+                    throw new QobuzApiException(
+                        $"Qobuz media download stalled for more than {StallTimeout.TotalSeconds:0}s "
+                        + $"after {total} bytes.");
+                }
+
+                if (read <= 0)
+                {
+                    break;
+                }
+
                 await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
 
                 total += read;
-                progress?.Report(total);
+
+                // Reports the chunk, not the running total. The consumer sums deltas, which
+                // removes the need for any high-water-mark bookkeeping on its side.
+                progress?.Report(read);
             }
 
             await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -388,7 +427,9 @@ namespace NzbDrone.Plugin.Qobuz.API
     /// is intentional: sessions are expensive (each login is a blocking HTTP round trip) and
     /// are safely shared.
     /// </remarks>
-    public sealed class QobuzSessionProvider : IQobuzSessionProvider, IDisposable
+    public sealed class QobuzSessionProvider : IQobuzSessionProvider,
+        IHandle<ApplicationShutdownRequested>,
+        IDisposable
     {
         private readonly ConcurrentDictionary<QobuzCredentials, QobuzSession> _sessions = new();
         private readonly Logger _logger;
@@ -482,6 +523,21 @@ namespace NzbDrone.Plugin.Qobuz.API
                         + "reclaimed once any download still using it finishes.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Disposes every cached session when Lidarr shuts down.
+        /// </summary>
+        /// <remarks>
+        /// Needed for the same reason <c>QobuzProxy</c> has one: Lidarr never disposes its DI
+        /// container, so <see cref="IDisposable"/> alone would make this unreachable and no
+        /// session, API client or <c>HttpClient</c> would ever be released. It also keeps the
+        /// eviction policy honest — eviction deliberately does not dispose, on the grounds
+        /// that shutdown does.
+        /// </remarks>
+        public void Handle(ApplicationShutdownRequested message)
+        {
+            Dispose();
         }
 
         public void Dispose()

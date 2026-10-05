@@ -216,6 +216,7 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         public long BytesWritten { get; }
 
+        /// <summary>True when every track in the album downloaded.</summary>
         public bool IsCompleteSuccess => FailedTracks == 0 && DownloadedTracks > 0;
     }
 
@@ -386,10 +387,11 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
             var fileName = TrackPathTemplate.Render(TrackPathTemplate.TrackFile, fields);
             var trackPath = Path.Combine(outputDirectory, fileName);
 
-            // Deliberately not Progress<long>: that type marshals its callbacks onto the
-            // captured context asynchronously, so two reports for the same track can run
-            // concurrently and out of order, and the read-modify-write below double-counts.
-            var progress = new MonotonicDeltaProgress(reportDelta);
+            // Deliberately not Progress<long>, which marshals its callbacks onto the captured
+            // context asynchronously and so can deliver two reports for one track out of
+            // order. This adapter is synchronous and the session reports ordered per-chunk
+            // deltas from a single thread, so no accumulator or lock is needed.
+            var progress = new ChunkProgress(reportDelta);
 
             var written = await _session
                 .DownloadTrackAsync(track.Id, spec.Quality, trackPath, progress, cancellationToken)
@@ -419,41 +421,28 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         }
 
         /// <summary>
-        /// Converts a stream of running totals into non-overlapping deltas.
+        /// Forwards per-chunk byte counts straight through, synchronously.
         /// </summary>
         /// <remarks>
-        /// Reports synchronously on the calling thread and under a lock, so deltas are exact
-        /// even when several tracks transfer at once. Out-of-order or repeated totals yield no
-        /// delta rather than a negative one.
+        /// Exists only because <see cref="Progress{T}"/> dispatches asynchronously. The
+        /// session reports ordered deltas from one thread per track, so there is nothing to
+        /// accumulate or guard.
         /// </remarks>
-        private sealed class MonotonicDeltaProgress : IProgress<long>
+        private sealed class ChunkProgress : IProgress<long>
         {
-            private readonly Action<long> _reportDelta;
-            private readonly object _gate = new();
-            private long _highWaterMark;
+            private readonly Action<long> _report;
 
-            internal MonotonicDeltaProgress(Action<long> reportDelta)
+            internal ChunkProgress(Action<long> report)
             {
-                _reportDelta = reportDelta;
+                _report = report;
             }
 
-            public void Report(long totalBytesSoFar)
+            public void Report(long bytes)
             {
-                long delta;
-
-                lock (_gate)
+                if (bytes > 0)
                 {
-                    delta = totalBytesSoFar - _highWaterMark;
-
-                    if (delta <= 0)
-                    {
-                        return;
-                    }
-
-                    _highWaterMark = totalBytesSoFar;
+                    _report(bytes);
                 }
-
-                _reportDelta(delta);
             }
         }
 

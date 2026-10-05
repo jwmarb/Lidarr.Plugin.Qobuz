@@ -60,24 +60,6 @@ namespace Lidarr.Plugin.Qobuz.Tests.Fakes
         /// <summary>Marks a track whose transfer fails outright.</summary>
         public void MakeTrackFail(string trackId) => _failingTracks.Add(trackId);
 
-        public string BuildApiUrl(string method, IReadOnlyDictionary<string, string>? parameters = null)
-        {
-            var url = "https://www.qobuz.com/api.json/0.2" + method;
-
-            if (parameters is { Count: > 0 })
-            {
-                var first = true;
-
-                foreach (var pair in parameters)
-                {
-                    url += (first ? "?" : "&") + pair.Key + "=" + Uri.EscapeDataString(pair.Value);
-                    first = false;
-                }
-            }
-
-            return url;
-        }
-
         public QobuzAlbumDownloadPlan GetAlbumDownloadPlan(string albumId)
         {
             AlbumPlanRequests++;
@@ -117,10 +99,12 @@ namespace Lidarr.Plugin.Qobuz.Tests.Fakes
                 Directory.CreateDirectory(directory);
             }
 
-            // Report in two halves so tests can observe incremental progress.
+            // Reports per-chunk deltas, matching the real session's contract: QobuzSession
+            // reports `read` for each chunk, not a running total. Two chunks, so tests can
+            // still observe incremental progress.
             var half = BytesPerTrack / 2;
             progress?.Report(half);
-            progress?.Report(BytesPerTrack);
+            progress?.Report(BytesPerTrack - half);
 
             await File.WriteAllBytesAsync(destinationPath, new byte[BytesPerTrack], cancellationToken)
                 .ConfigureAwait(false);

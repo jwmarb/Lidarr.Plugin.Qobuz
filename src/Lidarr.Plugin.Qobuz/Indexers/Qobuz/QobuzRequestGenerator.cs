@@ -74,7 +74,7 @@ namespace NzbDrone.Core.Indexers.Qobuz
                     ["offset"] = (page * PageSize).ToString(),
                 };
 
-                var url = _session.BuildApiUrl("/album/search", parameters);
+                var url = QobuzApiUrl.For("/album/search", parameters);
 
                 var request = new IndexerRequest(url, HttpAccept.Json);
                 request.HttpRequest.Method = System.Net.Http.HttpMethod.Get;
