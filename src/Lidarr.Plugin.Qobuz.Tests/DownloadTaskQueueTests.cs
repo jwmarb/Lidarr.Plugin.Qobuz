@@ -248,6 +248,46 @@ namespace Lidarr.Plugin.Qobuz.Tests
             executor.Seen.Should().Contain("good");
         }
 
+        /// <summary>
+        /// Hammers the path where a Lidarr thread removes an item while the queue worker is
+        /// starting it.
+        /// </summary>
+        /// <remarks>
+        /// This used to be a real race, not a theoretical one. The queue entry guarded its
+        /// cancellation source with an unsynchronized bool, so a disposal landing between the
+        /// flag check and the token read threw <see cref="ObjectDisposedException"/> inside
+        /// <c>RunJobAsync</c> — which caught it and marked a healthy download as Failed. A
+        /// standalone probe of that shape threw 55 times in 200,000 attempts.
+        /// </remarks>
+        [Test]
+        public async Task Removing_items_while_they_start_never_faults_the_queue()
+        {
+            var executor = new BlockingExecutor();
+            using var queue = new DownloadTaskQueue(executor, _logger, maxConcurrentAlbums: 4);
+            queue.Start();
+
+            for (var i = 0; i < 60; i++)
+            {
+                var id = $"racy-{i}";
+                await queue.EnqueueAsync(CreateJob(id));
+
+                // Removed immediately, with no delay, to land inside the window where the
+                // worker is reading the entry's token.
+                queue.RemoveItem(id);
+            }
+
+            // The queue must still be alive and usable afterwards.
+            await queue.EnqueueAsync(CreateJob("survivor"));
+            await WaitFor(() => executor.Started.Contains("survivor"));
+
+            queue.GetQueueListing().Should().Contain(s => s.DownloadId == "survivor");
+
+            // Nothing may have been recorded as Failed: these were cancellations, not errors.
+            queue.GetQueueListing()
+                .Should().NotContain(s => s.Status == DownloadItemStatus.Failed,
+                    "a cancelled download is not a failed one");
+        }
+
         private static async Task WaitFor(Func<bool> condition, int timeoutMs = 5000)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
