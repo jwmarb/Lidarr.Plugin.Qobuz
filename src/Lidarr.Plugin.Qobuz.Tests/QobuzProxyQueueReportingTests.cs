@@ -212,6 +212,105 @@ namespace Lidarr.Plugin.Qobuz.Tests
                 .Should().NotThrow();
         }
 
+        /// <summary>
+        /// End-to-end proof of the Critical fix: a partial album must reach Failed.
+        /// </summary>
+        /// <remarks>
+        /// Runs the real pipeline — proxy, queue, downloader — against the fake session, with
+        /// one track rigged to fail. Before the fix this reported Warning, a status Lidarr
+        /// ignores for terminal items, so the album was never imported and never retried.
+        /// </remarks>
+        [Test]
+        public async Task A_partial_album_ends_up_failed_so_lidarr_will_retry_it()
+        {
+            var credentials = new QobuzCredentials(
+                "user@example.com", "0123456789abcdef0123456789abcdef", null, null, null, null);
+
+            var session = new FakeQobuzSession(credentials);
+            session.AddAlbum(TestMetadata.Plan(trackCount: 3, albumId: "0060253764221"));
+            session.MakeTrackFail("track-2");
+            _sessions.Register(credentials, session);
+
+            var downloadRoot = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "qobuz-partial-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                await _proxy.Download(RemoteAlbum(), Settings(downloadRoot), FakeIndexer());
+
+                await WaitForStatus(DownloadItemStatus.Failed);
+
+                var item = _proxy.GetQueue().Single();
+
+                item.Status.Should().Be(DownloadItemStatus.Failed,
+                    "Warning is ignored by both CompletedDownloadService and "
+                    + "FailedDownloadService, so a partial album would strand forever");
+                item.Message.Should().Contain("2 of 3");
+            }
+            finally
+            {
+                if (System.IO.Directory.Exists(downloadRoot))
+                {
+                    System.IO.Directory.Delete(downloadRoot, recursive: true);
+                }
+            }
+        }
+
+        [Test]
+        public async Task A_fully_downloaded_album_ends_up_completed_so_lidarr_will_import_it()
+        {
+            var credentials = new QobuzCredentials(
+                "user@example.com", "0123456789abcdef0123456789abcdef", null, null, null, null);
+
+            var session = new FakeQobuzSession(credentials);
+            session.AddAlbum(TestMetadata.Plan(trackCount: 3, albumId: "0060253764221"));
+            _sessions.Register(credentials, session);
+
+            var downloadRoot = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "qobuz-full-" + Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                await _proxy.Download(RemoteAlbum(), Settings(downloadRoot), FakeIndexer());
+
+                await WaitForStatus(DownloadItemStatus.Completed);
+
+                var item = _proxy.GetQueue().Single();
+
+                // Completed is the only status Lidarr will import, and the output path is how
+                // it finds the files.
+                item.Status.Should().Be(DownloadItemStatus.Completed);
+                item.OutputPath.ToString().Should().NotBeNullOrWhiteSpace();
+                item.RemainingSize.Should().Be(0);
+            }
+            finally
+            {
+                if (System.IO.Directory.Exists(downloadRoot))
+                {
+                    System.IO.Directory.Delete(downloadRoot, recursive: true);
+                }
+            }
+        }
+
+        private async Task WaitForStatus(DownloadItemStatus status, int timeoutMs = 10000)
+        {
+            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+            while (DateTime.UtcNow < deadline)
+            {
+                if (_proxy.GetQueue().Any(i => i.Status == status))
+                {
+                    return;
+                }
+
+                await Task.Delay(25);
+            }
+
+            throw new TimeoutException(
+                $"No queue item reached {status}. Observed: "
+                + string.Join(", ", _proxy.GetQueue().Select(i => i.Status.ToString())));
+        }
+
         private static NzbDrone.Core.Indexers.IIndexer FakeIndexer() => new StubQobuzIndexer();
 
         /// <summary>Supplies a Qobuz indexer definition carrying usable credentials.</summary>
