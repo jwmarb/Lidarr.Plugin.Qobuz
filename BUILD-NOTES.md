@@ -11,7 +11,21 @@ dotnet restore src/Lidarr.Plugin.Qobuz.sln -p:NuGetAudit=false
 dotnet build   src/Lidarr.Plugin.Qobuz.sln -c Release -f net8.0 -p:NuGetAudit=false --no-restore
 ```
 
-Result: `Build succeeded`, 14 warnings, 0 errors.
+Result: `Build succeeded`, 0 errors.
+
+Warning counts, stated precisely, because this is easy to get wrong:
+
+- **Warnings from this plugin's own code (`src/`): 0.**
+- **A truly clean build reports 7 warnings**, all inside the `ext/QobuzApiSharp`
+  submodule (`SYSLIB0051` / `CS0672`, obsolete formatter-based serialization on its
+  three exception types). They are upstream's, not ours, and predate this work.
+- An *incremental* rebuild reports **0**, because the submodule is not recompiled.
+  Do not quote that number as "0 warnings" without qualification: a reviewer doing a
+  from-scratch build will see 7 and reasonably conclude you were sloppy. To reproduce
+  the honest figure, delete `ext/QobuzApiSharp/QobuzApiSharp/{obj,bin}` as well as
+  `_temp` and `_plugins` before building.
+- Building with `--network none` adds 2 more (`Sentry API request failed` from
+  `Sentry.targets`); that is a sandbox artifact, not a code issue.
 Output: `_plugins/net8.0/Lidarr.Plugin.Qobuz/Lidarr.Plugin.Qobuz.dll` (ILRepack-merged).
 
 ## Four environment traps, and why each flag is needed
@@ -50,7 +64,8 @@ Output: `_plugins/net8.0/Lidarr.Plugin.Qobuz/Lidarr.Plugin.Qobuz.dll` (ILRepack-
 
 ## Pre-existing warnings (present before any of my changes)
 
-Baseline is 14 warnings. Not introduced by this work:
+The original baseline was 14 warnings. The 7 that remain are all upstream
+submodule warnings; the plugin's own 7 are gone. Original list:
 
 - `CS8632` x4 — `?` nullable annotations without `#nullable enable`
   (`API/QobuzAPI.cs:39,40`, `API/Downloader.cs:77,77,123`).

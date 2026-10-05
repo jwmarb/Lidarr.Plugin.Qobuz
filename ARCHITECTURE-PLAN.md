@@ -16,7 +16,8 @@ dotnet test  src/Lidarr.Plugin.Qobuz.Tests/Lidarr.Plugin.Qobuz.Tests.csproj -p:N
 ```
 
 Baseline before any change: build succeeded, 14 warnings, 0 errors, 0 tests.
-Current: build succeeded, **0 warnings**, 0 errors, **120 tests passing**.
+Current: build succeeded, **0 errors**, **0 warnings from `src/`** (7 from the
+`ext/QobuzApiSharp` submodule on a clean build — see BUILD-NOTES.md), **143 tests passing**.
 
 ## Independently re-verified 2026-10-04 (after the implementation commits)
 
@@ -147,3 +148,44 @@ custom format and every quality-size limit has been evaluated against an
   fully correct from inside the plugin (host singleton mutation, point 5).
   Entry-point snapshotting makes the single-definition case correct and keyed
   state prevents cross-contamination after entry.
+
+## Quality pass: verifier verdict (sub-5c9c, 2026-10-04)
+
+**PASS**, executed inside `ralph-verify/base:latest` under `--network none` against
+throwaway copies of the tree. It corrected me twice and flagged one latent trap. All
+three are now addressed:
+
+1. **My "0 warnings" claim was wrong.** A clean build emits **7**, all in the
+   `ext/QobuzApiSharp` submodule; warnings attributable to `src/` are 0. I had been
+   quoting an *incremental* build, which skips recompiling the submodule. BUILD-NOTES.md
+   now states both numbers and how to reproduce the honest one.
+2. **"120 tests" was stale** by the time it finished, because I was committing while it
+   ran. It verified both states: 120/120 on the older snapshot and 140/140 on the newer.
+3. **`TryFromContainer` left `MP3320` in its `out` parameter on failure.** Correct at the
+   single existing call site (`QobuzProxy.cs` checks the bool and throws), but a trap: a
+   future caller who ignored the bool would silently downgrade a hi-res grab to lossy,
+   which is the exact bug this module was built to eliminate. The signature is now
+   `[NotNullWhen(true)] out AudioQualitySpec?` and sets `null` on failure, so ignoring
+   the result is a compiler warning. Enabling that annotation immediately surfaced two
+   unchecked dereferences in my own tests, which are also fixed.
+
+It independently confirmed, by reflection against the **shipped merged assembly** rather
+than by trusting the suite: `EstimateBytes(600)` = 105,840,000 (bytes, not bits); the
+quality round-trip holds for all four values and rejects all 6 bad inputs; ILRepack
+genuinely rewrites the merged DLL (977 types, library types inside it); MSB3073 is gone;
+and no references to the deleted types remain. It ran the two concurrency tests **20
+consecutive times** with zero flakiness, plus 8 full-suite runs.
+
+Its stated limits, which I accept: nothing here proves the plugin loads inside a running
+Lidarr host, and no cold NuGet restore or Windows deploy was exercised.
+
+## Regression I introduced and then fixed in the same session
+
+While auditing my own eviction fix I found I had created a **use-after-dispose**: an
+evicted session was being `Dispose()`d, but `QobuzProxy.ExecuteAsync` holds a session
+across an entire multi-minute album download. Editing credentials mid-download would
+have closed the `HttpClient` underneath a live transfer. Eviction now drops the cache
+reference without disposing; the GC reclaims the session once the download still holding
+it finishes. Only `Dispose()` at process shutdown disposes eagerly. This is a good
+illustration of why the bounded-leak-versus-correctness trade has to be made
+deliberately rather than by reflex.

@@ -406,10 +406,9 @@ namespace NzbDrone.Plugin.Qobuz.API
 
                 var session = CreateAndAuthenticate(credentials);
 
-                // Each session owns an HttpClient and a QobuzApiService, so superseded ones
-                // are retired rather than accumulated. Without this, every credential edit
-                // leaks a logged-in session for the rest of the process lifetime.
-                RetireSupersededSessions();
+                // Stop handing out sessions for credentials nobody is configured with any
+                // more, so the cache cannot grow without bound as a user edits settings.
+                EvictSupersededSessions();
 
                 _sessions[credentials] = session;
                 return session;
@@ -417,14 +416,27 @@ namespace NzbDrone.Plugin.Qobuz.API
         }
 
         /// <summary>
-        /// Disposes cached sessions beyond the most recent few.
+        /// Drops cached sessions beyond the most recent few so the cache stays bounded.
         /// </summary>
         /// <remarks>
-        /// Called under <see cref="_loginLock"/>. A small number is kept rather than exactly
-        /// one, because a Lidarr instance may legitimately have several Qobuz indexers
-        /// configured with different accounts.
+        /// <para>
+        /// Called under <see cref="_loginLock"/>. Several are kept rather than one, because a
+        /// Lidarr instance may legitimately have more than one Qobuz indexer configured with
+        /// different accounts.
+        /// </para>
+        /// <para>
+        /// Evicted sessions are deliberately <b>not</b> disposed. A caller can hold a session
+        /// across a multi-minute album download — <c>QobuzProxy.ExecuteAsync</c> does exactly
+        /// that, awaiting a whole album between acquiring the session and finishing with it —
+        /// and this provider has no way to know. Disposing here would close the
+        /// <see cref="HttpClient"/> underneath a live transfer and fail a download that was
+        /// progressing fine. Dropping the reference is enough: the garbage collector reclaims
+        /// the session once the download that still holds it completes, and its pooled
+        /// connections idle out on their own. Only <see cref="Dispose"/>, at process shutdown,
+        /// disposes sessions eagerly.
+        /// </para>
         /// </remarks>
-        private void RetireSupersededSessions()
+        private void EvictSupersededSessions()
         {
             const int MaxCachedSessions = 4;
 
@@ -440,16 +452,11 @@ namespace NzbDrone.Plugin.Qobuz.API
                     break;
                 }
 
-                if (_sessions.TryRemove(key, out var retired))
+                if (_sessions.TryRemove(key, out _))
                 {
-                    try
-                    {
-                        retired.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.Debug(ex, "Error disposing a superseded Qobuz session.");
-                    }
+                    _logger.Debug(
+                        "Evicted a superseded Qobuz session from the cache; it will be "
+                        + "reclaimed once any download still using it finishes.");
                 }
             }
         }

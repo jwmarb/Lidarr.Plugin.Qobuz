@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 
 namespace NzbDrone.Plugin.Qobuz.API
@@ -201,7 +202,7 @@ namespace NzbDrone.Plugin.Qobuz.API
         /// indexer and the download client turned a user's hi-res grab into a lossy file with
         /// no warning anywhere.
         /// </remarks>
-        public static bool TryFromContainer(string? container, out AudioQualitySpec spec)
+        public static bool TryFromContainer(string? container, [NotNullWhen(true)] out AudioQualitySpec? spec)
         {
             if (!string.IsNullOrWhiteSpace(container))
             {
@@ -217,7 +218,11 @@ namespace NzbDrone.Plugin.Qobuz.API
                 }
             }
 
-            spec = Specs[0];
+            // Deliberately null, not Specs[0]. Handing back MP3 320 on failure is what the
+            // original code did implicitly, and a caller who ignored the bool silently
+            // downgraded the user's hi-res grab to a lossy file. Null makes ignoring the
+            // result a compile-time nullable warning instead of a silent downgrade.
+            spec = null;
             return false;
         }
     }

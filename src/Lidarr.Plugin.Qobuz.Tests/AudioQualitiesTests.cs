@@ -54,7 +54,7 @@ namespace Lidarr.Plugin.Qobuz.Tests
             var parsed = AudioQualities.TryFromContainer(container, out var spec);
 
             parsed.Should().BeTrue();
-            spec.Quality.Should().Be(quality);
+            spec!.Quality.Should().Be(quality);
         }
 
         [Test]
@@ -62,7 +62,7 @@ namespace Lidarr.Plugin.Qobuz.Tests
         {
             AudioQualities.TryFromContainer("  lossless  ", out var spec).Should().BeTrue();
 
-            spec.Quality.Should().Be(AudioQuality.FLACLossless);
+            spec!.Quality.Should().Be(AudioQuality.FLACLossless);
         }
 
         /// <summary>
@@ -81,6 +81,22 @@ namespace Lidarr.Plugin.Qobuz.Tests
 
             parsed.Should().BeFalse(
                 "an unrecognised container must be reported, not silently turned into MP3 320");
+        }
+
+        /// <summary>
+        /// On failure the out-parameter must be null, not a default quality. Returning
+        /// MP3 320 there is what the original code did implicitly, so a caller who ignored
+        /// the boolean silently downgraded a hi-res grab to a lossy file.
+        /// </summary>
+        [TestCase("")]
+        [TestCase(null)]
+        [TestCase("Dolby Atmos")]
+        public void A_failed_container_parse_yields_no_spec_at_all(string? container)
+        {
+            AudioQualities.TryFromContainer(container, out var spec).Should().BeFalse();
+
+            spec.Should().BeNull(
+                "handing back a default quality on failure is a silent downgrade");
         }
 
         [Test]
