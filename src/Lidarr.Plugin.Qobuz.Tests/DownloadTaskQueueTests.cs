@@ -118,14 +118,17 @@ namespace Lidarr.Plugin.Qobuz.Tests
         }
 
         [Test]
-        public void Rejects_a_null_job()
+        public async Task Rejects_a_null_job()
         {
             var executor = new RecordingExecutor();
             using var queue = new DownloadTaskQueue(executor, _logger);
 
             Func<Task> act = () => queue.EnqueueAsync(null!);
 
-            act.Should().ThrowAsync<ArgumentNullException>();
+            // Must be awaited. ThrowAsync returns a Task, and a non-awaited one never runs the
+            // assertion at all - verified against FluentAssertions 5.10.3, where a non-awaited
+            // ThrowAsync passes even when the target throws nothing whatsoever.
+            await act.Should().ThrowAsync<ArgumentNullException>();
         }
 
         [Test]
@@ -288,6 +291,65 @@ namespace Lidarr.Plugin.Qobuz.Tests
                     "a cancelled download is not a failed one");
         }
 
+        /// <summary>
+        /// The queue, not the executor, applies the terminal status.
+        /// </summary>
+        /// <remarks>
+        /// Terminal state used to be set inside the executor while the running state was set
+        /// here, which split one job's lifecycle across two modules and meant this method could
+        /// not honour its own documented guarantee. The executor now returns an outcome.
+        /// </remarks>
+        [Test]
+        public async Task Applies_the_terminal_status_from_the_executor_outcome()
+        {
+            var executor = new OutcomeExecutor(
+                AlbumDownloadOutcome.Failure("only 3 of 11 tracks downloaded"));
+
+            using var queue = new DownloadTaskQueue(executor, _logger);
+            queue.Start();
+
+            await queue.EnqueueAsync(CreateJob());
+            await WaitFor(() => queue.GetQueueListing()
+                .Any(s => s.Status == DownloadItemStatus.Failed));
+
+            var snapshot = queue.GetQueueListing().Single();
+
+            // Failed, never Warning. Lidarr ignores Warning for terminal items: it is neither
+            // imported (CompletedDownloadService.Check) nor failed (FailedDownloadService), so
+            // a Warning album would sit in the queue forever, unimported and un-retried.
+            snapshot.Status.Should().Be(DownloadItemStatus.Failed);
+            snapshot.Status.Should().NotBe(DownloadItemStatus.Warning);
+            snapshot.Message.Should().Contain("only 3 of 11 tracks downloaded");
+        }
+
+        [Test]
+        public async Task A_successful_outcome_marks_the_job_completed()
+        {
+            var executor = new OutcomeExecutor(AlbumDownloadOutcome.Success());
+
+            using var queue = new DownloadTaskQueue(executor, _logger);
+            queue.Start();
+
+            await queue.EnqueueAsync(CreateJob());
+            await WaitFor(() => queue.GetQueueListing()
+                .Any(s => s.Status == DownloadItemStatus.Completed));
+
+            // Completed is the only status Lidarr will import.
+            queue.GetQueueListing().Single().Status
+                .Should().Be(DownloadItemStatus.Completed);
+        }
+
+        [Test]
+        public void An_outcome_carries_a_message_only_when_it_failed()
+        {
+            AlbumDownloadOutcome.Success().Succeeded.Should().BeTrue();
+            AlbumDownloadOutcome.Success().Message.Should().BeNull();
+
+            var failure = AlbumDownloadOutcome.Failure("why");
+            failure.Succeeded.Should().BeFalse();
+            failure.Message.Should().Be("why");
+        }
+
         private static async Task WaitFor(Func<bool> condition, int timeoutMs = 5000)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -311,21 +373,40 @@ namespace Lidarr.Plugin.Qobuz.Tests
 
             internal bool CompleteJobs { get; set; }
 
-            public Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+            public Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
             {
                 Executed.Add(job);
 
-                if (CompleteJobs)
-                {
-                    job.MarkCompleted();
-                }
-
-                return Task.CompletedTask;
+                // The queue applies the terminal status from this outcome.
+                return Task.FromResult(
+                    CompleteJobs
+                        ? AlbumDownloadOutcome.Success()
+                        : AlbumDownloadOutcome.Failure("executor reported no result"));
             }
 
             internal async Task WaitForExecutions(int count, int timeoutMs = 5000)
             {
                 await WaitFor(() => Executed.Count >= count, timeoutMs);
+            }
+        }
+
+        /// <summary>Returns a fixed outcome, so the queue's own handling of it is testable.</summary>
+        private sealed class OutcomeExecutor : IQobuzAlbumDownloadExecutor
+        {
+            private readonly AlbumDownloadOutcome _outcome;
+
+            internal OutcomeExecutor(AlbumDownloadOutcome outcome)
+            {
+                _outcome = outcome;
+            }
+
+            public Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
+            {
+                return Task.FromResult(_outcome);
             }
         }
 
@@ -335,7 +416,9 @@ namespace Lidarr.Plugin.Qobuz.Tests
 
             internal ConcurrentBag<string> Cancelled { get; } = new();
 
-            public async Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+            public async Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
             {
                 Started.Add(job.DownloadId);
 
@@ -348,6 +431,8 @@ namespace Lidarr.Plugin.Qobuz.Tests
                     Cancelled.Add(job.DownloadId);
                     throw;
                 }
+
+                return AlbumDownloadOutcome.Success();
             }
         }
 
@@ -360,7 +445,9 @@ namespace Lidarr.Plugin.Qobuz.Tests
                 _message = message;
             }
 
-            public Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+            public Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
             {
                 throw new InvalidOperationException(_message);
             }
@@ -370,7 +457,9 @@ namespace Lidarr.Plugin.Qobuz.Tests
         {
             internal ConcurrentBag<string> Seen { get; } = new();
 
-            public Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+            public Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
             {
                 Seen.Add(job.DownloadId);
 
@@ -379,7 +468,7 @@ namespace Lidarr.Plugin.Qobuz.Tests
                     throw new InvalidOperationException("boom");
                 }
 
-                return Task.CompletedTask;
+                return Task.FromResult(AlbumDownloadOutcome.Success());
             }
         }
 
@@ -393,7 +482,9 @@ namespace Lidarr.Plugin.Qobuz.Tests
 
             internal int Executions => Volatile.Read(ref _executions);
 
-            public async Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+            public async Task<AlbumDownloadOutcome> ExecuteAsync(
+                QobuzDownloadJob job,
+                CancellationToken cancellationToken)
             {
                 var now = Interlocked.Increment(ref _current);
 
@@ -415,6 +506,8 @@ namespace Lidarr.Plugin.Qobuz.Tests
                     Interlocked.Decrement(ref _current);
                     Interlocked.Increment(ref _executions);
                 }
+
+                return AlbumDownloadOutcome.Success();
             }
 
             internal async Task WaitForExecutions(int count, int timeoutMs = 10000)

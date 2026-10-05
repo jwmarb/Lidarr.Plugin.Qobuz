@@ -299,7 +299,11 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
                 {
                     if (!_entries.TryGetValue(job.DownloadId, out var entry))
                     {
-                        // Removed between enqueue and execution.
+                        // Removed between enqueue and execution. Marked cancelled rather than
+                        // left Queued: the job is no longer in _entries so it will never be
+                        // listed again, but anything still holding a reference must not see it
+                        // stuck in a running state.
+                        job.MarkFailed("Download was removed before it started.");
                         return;
                     }
 
@@ -312,7 +316,18 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
 
                 job.MarkDownloading();
 
-                await _executor.ExecuteAsync(job, linked.Token).ConfigureAwait(false);
+                // The queue applies the terminal status, so one module owns the whole
+                // lifecycle and the guarantee in this method's summary actually holds.
+                var outcome = await _executor.ExecuteAsync(job, linked.Token).ConfigureAwait(false);
+
+                if (outcome.Succeeded)
+                {
+                    job.MarkCompleted();
+                }
+                else
+                {
+                    job.MarkFailed(outcome.Message ?? "The Qobuz download failed.");
+                }
             }
             catch (OperationCanceledException)
             {
@@ -417,6 +432,34 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
     }
 
     /// <summary>
+    /// How a queued album download ended.
+    /// </summary>
+    /// <remarks>
+    /// Returned rather than applied, so the queue remains the single owner of a job's status
+    /// transitions. Previously the executor set the terminal status itself while the queue set
+    /// the running status, which split one job's lifecycle across two modules and left the
+    /// queue unable to honour its own documented guarantee.
+    /// </remarks>
+    public sealed class AlbumDownloadOutcome
+    {
+        private AlbumDownloadOutcome(bool succeeded, string? message)
+        {
+            Succeeded = succeeded;
+            Message = message;
+        }
+
+        public bool Succeeded { get; }
+
+        /// <summary>Detail for the user; always present on failure.</summary>
+        public string? Message { get; }
+
+        public static AlbumDownloadOutcome Success() => new AlbumDownloadOutcome(true, null);
+
+        public static AlbumDownloadOutcome Failure(string message) =>
+            new AlbumDownloadOutcome(false, message);
+    }
+
+    /// <summary>
     /// Executes one queued album download.
     /// </summary>
     /// <remarks>
@@ -425,6 +468,8 @@ namespace NzbDrone.Core.Download.Clients.Qobuz.Queue
     /// </remarks>
     public interface IQobuzAlbumDownloadExecutor
     {
-        Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken);
+        Task<AlbumDownloadOutcome> ExecuteAsync(
+            QobuzDownloadJob job,
+            CancellationToken cancellationToken);
     }
 }

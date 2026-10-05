@@ -10,6 +10,8 @@ using NzbDrone.Common.Disk;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Core.Download.Clients.Qobuz.Queue;
 using NzbDrone.Core.Indexers;
+using NzbDrone.Core.Lifecycle;
+using NzbDrone.Core.Messaging.Events;
 using NzbDrone.Core.Indexers.Qobuz;
 using NzbDrone.Core.Parser.Model;
 using NzbDrone.Plugin.Qobuz.API;
@@ -34,7 +36,10 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
     /// shared instance per resolution; a settings read that happens later in a call can belong
     /// to a different configured client.
     /// </remarks>
-    public class QobuzProxy : IQobuzProxy, IQobuzAlbumDownloadExecutor, IDisposable
+    public class QobuzProxy : IQobuzProxy,
+        IQobuzAlbumDownloadExecutor,
+        IHandle<ApplicationShutdownRequested>,
+        IDisposable
     {
         private readonly ICached<DateTime?> _startTimeCache;
         private readonly IQobuzSessionProvider _sessionProvider;
@@ -136,7 +141,9 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
         /// <summary>
         /// Runs one queued album download.
         /// </summary>
-        public async Task ExecuteAsync(QobuzDownloadJob job, CancellationToken cancellationToken)
+        public async Task<AlbumDownloadOutcome> ExecuteAsync(
+            QobuzDownloadJob job,
+            CancellationToken cancellationToken)
         {
             var session = _sessionProvider.GetSession(job.Credentials);
 
@@ -158,20 +165,42 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
             if (result.DownloadedTracks == 0)
             {
-                job.MarkFailed($"No tracks could be downloaded for {job.Title}.");
-                return;
+                return AlbumDownloadOutcome.Failure(
+                    $"No tracks could be downloaded for {job.Title}.");
             }
 
             if (result.FailedTracks > 0)
             {
-                // Partial success: the files that did arrive are still importable, so this is a
-                // warning rather than an outright failure.
-                job.MarkWarning(
-                    $"{result.FailedTracks} of {plan.Tracks.Count} tracks failed for {job.Title}.");
-                return;
+                // Reported as Failed, not Warning. Lidarr ignores Warning entirely for
+                // terminal items: CompletedDownloadService.Check returns unless the status is
+                // Completed, and FailedDownloadService acts only on Failed, so a Warning item
+                // is never imported, never failed, never blocklisted and never retried — it
+                // just sits in the queue forever. Upstream pins that behaviour in its own test
+                // (CompletedDownloadServiceTests/ProcessFixture.cs:105 lists Warning under
+                // should_not_process_if_download_status_isnt_completed). Failing it means
+                // Lidarr can blocklist this release and search for another source, which is
+                // what a user actually wants from an incomplete album.
+                return AlbumDownloadOutcome.Failure(
+                    $"Only {result.DownloadedTracks} of {plan.Tracks.Count} tracks downloaded "
+                    + $"for {job.Title}; {result.FailedTracks} failed.");
             }
 
-            job.MarkCompleted();
+            return AlbumDownloadOutcome.Success();
+        }
+
+        /// <summary>
+        /// Stops the download queue when Lidarr shuts down.
+        /// </summary>
+        /// <remarks>
+        /// Lidarr registers this type as a singleton and never disposes the container, so
+        /// <see cref="IDisposable"/> alone is decorative — without this handler the queue's
+        /// bounded shutdown logic would be unreachable in production. <c>IHandle</c> is the
+        /// host's own convention for this, used by <c>Scheduler</c>, <c>CommandExecutor</c>
+        /// and <c>DatabaseTarget</c>.
+        /// </remarks>
+        public void Handle(ApplicationShutdownRequested message)
+        {
+            Dispose();
         }
 
         public void Dispose()

@@ -47,12 +47,15 @@ namespace NzbDrone.Core.Download.Clients.Qobuz
 
         public override void RemoveItem(DownloadClientItem item, bool deleteData)
         {
+            // Cancel first, then delete. DeleteItemData removes OutputPath recursively, and a
+            // still-running download re-creates that directory and its .part file on the very
+            // next track, leaving orphaned files under a path Lidarr believes is gone.
+            _proxy.RemoveFromQueue(item.DownloadId);
+
             if (deleteData)
             {
                 DeleteItemData(item);
             }
-
-            _proxy.RemoveFromQueue(item.DownloadId);
         }
 
         /// <summary>
