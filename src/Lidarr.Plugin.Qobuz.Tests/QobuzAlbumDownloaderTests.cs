@@ -282,6 +282,34 @@ namespace Lidarr.Plugin.Qobuz.Tests
             act.Should().Throw<ArgumentException>();
         }
 
+        /// <summary>
+        /// Two grabs of the same album can be in flight at once, because Lidarr assigns a
+        /// fresh download id per grab and both resolve to the same destination path.
+        /// </summary>
+        /// <remarks>
+        /// This is why the real session names its temporary file uniquely per attempt rather
+        /// than using a fixed "&lt;file&gt;.part": with a shared name the second attempt hits
+        /// <c>FileShare.None</c> and fails, turning a harmless duplicate into a reported
+        /// download failure.
+        /// </remarks>
+        [Test]
+        public async Task Two_concurrent_downloads_of_the_same_album_both_succeed()
+        {
+            var planA = TestMetadata.Plan(trackCount: 3);
+            var planB = TestMetadata.Plan(trackCount: 3);
+
+            var downloader = CreateDownloader();
+
+            var resultA = downloader.DownloadAsync(planA, CreateRequest());
+            var resultB = downloader.DownloadAsync(planB, CreateRequest());
+
+            var results = await Task.WhenAll(resultA, resultB);
+
+            results.Should().OnlyContain(r => r.FailedTracks == 0,
+                "a duplicate in-flight album must not fail either attempt");
+            results.Should().OnlyContain(r => r.DownloadedTracks == 3);
+        }
+
         private sealed class RecordingTagger : ITrackTagger
         {
             internal System.Collections.Concurrent.ConcurrentBag<TagCall> Calls { get; } = new();

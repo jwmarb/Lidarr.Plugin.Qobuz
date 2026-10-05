@@ -170,7 +170,13 @@ namespace NzbDrone.Plugin.Qobuz.API
                 Directory.CreateDirectory(directory);
             }
 
-            var temporaryPath = destinationPath + ".part";
+            // Unique per attempt, not a fixed "<file>.part". Lidarr assigns a fresh download
+            // id to every grab, so the same album can legitimately be in flight twice at once
+            // (a retry overlapping a cancelled transfer that is still draining), and both
+            // attempts resolve to the same destination path. With a shared temporary name the
+            // second attempt hits FileShare.None and fails, turning a harmless duplicate into
+            // a reported download failure.
+            var temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.part";
 
             try
             {
