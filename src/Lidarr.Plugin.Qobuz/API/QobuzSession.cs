@@ -313,6 +313,9 @@ namespace NzbDrone.Plugin.Qobuz.API
                     $"Qobuz media download failed with HTTP {(int)response.StatusCode}.");
             }
 
+            // Captured before reading so a short transfer can be detected afterwards.
+            var expectedBytes = response.Content.Headers.ContentLength;
+
             await using var source = await response.Content
                 .ReadAsStreamAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -342,6 +345,20 @@ namespace NzbDrone.Plugin.Qobuz.API
             if (total == 0)
             {
                 throw new QobuzApiException("Qobuz media download produced an empty file.");
+            }
+
+            // Defence in depth, not a known bug. I probed this against a server that declares
+            // a large Content-Length and then sends a short body with a clean FIN: .NET 8's
+            // HttpClient already raises HttpIOException for that, and a connection reset
+            // raises IOException, so the transport normally surfaces truncation on its own.
+            // The comparison stays because the consequence of a miss is the worst outcome
+            // available — a truncated FLAC renamed into place and imported as if complete,
+            // corrupting the library silently until playback — and it costs one branch.
+            if (expectedBytes.HasValue && total != expectedBytes.Value)
+            {
+                throw new QobuzApiException(
+                    $"Qobuz media download was truncated: expected {expectedBytes.Value} bytes "
+                    + $"but received {total}.");
             }
 
             return total;
