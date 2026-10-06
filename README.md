@@ -109,8 +109,8 @@ services:
 | `Qobuz Password (MD5)` | — | An **MD5 hash** of your password, not the password. |
 | `User ID` | — | Alternative to email login. Needs `User Auth Token` alongside it. |
 | `User Auth Token` | — | The other half of token login. If it fails, try setting `App ID` and `App Secret`. |
-| `App ID` | optional | Qobuz app id. Leave empty to scrape the web player's values. |
-| `App Secret` | optional | Required if `App ID` is set, and vice versa — one without the other is rejected. |
+| `App ID` | optional | Qobuz app id. Left empty, the plugin scrapes the web player's id and secret. Some accounts are only accepted by a *different* app id than the web player's — see Known Limitations. |
+| `App Secret` | optional | Required if `App ID` is set, and vice versa — one without the other is rejected. It must be the secret **paired with that app id**: a mismatched pair logs in but then fails every `getFileUrl` call. |
 | `Early Download Limit` | none | Days before a release date that Lidarr may grab from this indexer. Advanced. |
 
 **Download client**
@@ -166,6 +166,8 @@ dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false \
 
 ## Known Limitations ⚠️
 
+- **Some accounts are rejected by the web player's app id.** Verified against two live accounts: one authenticated only with the scraped web-player app id, the other only with a different app id, each returning HTTP 401 for the other. The failure is reported accurately by **Test**, but there is no way to discover a working app id from inside Lidarr, and an app id supplied without its own matching secret will log in and then fail every media-URL request — so the album fails with `Failed to resolve a Qobuz media URL`. If `Test` passes but every track fails, this pairing is the first thing to check.
+- **An account without a current streaming entitlement silently gets 30-second previews.** Qobuz answers `getFileUrl` with `sample: true` and a 320kbps MP3 rather than an error, for *every* requested format including FLAC. The plugin detects this and fails the track (`Qobuz returned a preview sample ... so this account cannot stream FLAC Lossless`) rather than importing a truncated preview as a lossless file, so the symptom of a lapsed subscription is an album that fails rather than a library full of 30-second tracks.
 - **Hi-Res albums always offer 192kHz.** Qobuz marks an album Hi-Res streamable without saying which rate it will actually serve, so both 96kHz and 192kHz are published. Ask for 192 and Qobuz may hand back 96 — which is harmless, but the grabbed release is then labelled more optimistically than the file.
 - **Search results estimate file size.** Qobuz exposes no cheap way to learn an album's byte size, so releases carry a figure derived from duration and bitrate. FLAC compresses, so the estimate runs high, and size-based custom formats act on an approximation. The real byte count replaces it once a download completes.
 - **A partially-failed album is reported as failed.** If some tracks download and others do not, the whole release is marked `Failed` rather than imported in part. Lidarr can then blocklist it and look for another source — but the tracks that did arrive are not kept.
