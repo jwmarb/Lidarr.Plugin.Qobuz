@@ -109,7 +109,7 @@ services:
 | `Qobuz Password (MD5)` | — | An **MD5 hash** of your password, not the password. |
 | `User ID` | — | Alternative to email login. Needs `User Auth Token` alongside it. |
 | `User Auth Token` | — | The other half of token login. If it fails, try setting `App ID` and `App Secret`. |
-| `App ID` | optional | Qobuz app id. Left empty, the plugin scrapes the web player's id and secret. Some accounts are only accepted by a *different* app id than the web player's — see Known Limitations. |
+| `App ID` | optional | Qobuz API client id. Left empty, the plugin scrapes the web player's id and secret. If login fails, or if **Test** passes but every track fails, set this explicitly — see [Choosing an App ID and Secret](#choosing-an-app-id-and-secret-). |
 | `App Secret` | optional | Required if `App ID` is set, and vice versa — one without the other is rejected. It must be the secret **paired with that app id**: a mismatched pair logs in but then fails every `getFileUrl` call. |
 | `Early Download Limit` | none | Days before a release date that Lidarr may grab from this indexer. Advanced. |
 
@@ -120,6 +120,28 @@ services:
 | `Download Path` | — | Where tracks are written before Lidarr imports them. Saving checks it is a valid path; **Test** additionally checks it exists and is writable. |
 | `Save Synced Lyrics` | `false` | Writes a `.lrc` file when synced lyrics exist. Needs `lrc` in Import Extra Files. |
 | `Use LRCLIB as Lyric Provider` | `false` | Qobuz supplies no lyrics, so enable this to fetch them from LRCLIB. |
+
+## Choosing an App ID and Secret 🔑
+
+`App ID` and `App Secret` are Qobuz's **API client credentials** — they identify the *application* talking to the API, like the web player or the mobile app. They are not tied to your account, they are not per-user secrets, and they are the same values for everybody.
+
+**Leave both empty first.** The plugin then scrapes the web player's pair out of `play.qobuz.com`'s `bundle.js`, exactly as the official web player does, and most accounts work this way.
+
+If your account returns `401` on **Test**, or **Test** passes but every track fails to download, your account is one that the web player's app id does not accept. Use the mobile client's pair instead:
+
+| Field | Value |
+| --- | --- |
+| `App ID` | `712109809` |
+| `App Secret` | `589be88e4538daea11f509d29e4a23b1` |
+
+This pair is verified end to end against a live Qobuz Studio subscription: login, `getFileUrl` signing, and a complete album imported as real lossless FLAC.
+
+Two things worth understanding, because both produce confusing symptoms:
+
+- **The id and secret are a matched pair.** Qobuz signs `getFileUrl` with `md5(... + app_secret)`, so an id combined with the wrong secret logs in happily and then fails every media-URL request with `Invalid Request Signature`. Never mix an id from one pair with a secret from another.
+- **An auth token is bound to the app id that minted it.** If you switch app id while using `User ID` + `User Auth Token`, the old token stops working and you must obtain a new one. Email + MD5 password has no such problem, which is why it is the easier of the two login modes.
+
+The web player's pair is discoverable because it ships in a public JavaScript bundle. The mobile pair above is not in that bundle — it comes from Qobuz's own mobile client, and is the value independent projects such as [SpotiFLAC](https://github.com/spotbye/SpotiFLAC) and [musicdl](https://github.com/CharlesPikachu/musicdl) use for the same reason.
 
 ## Testing 🧪
 
@@ -166,7 +188,7 @@ dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false \
 
 ## Known Limitations ⚠️
 
-- **Some accounts are rejected by the web player's app id.** Verified against two live accounts: one authenticated only with the scraped web-player app id, the other only with a different app id, each returning HTTP 401 for the other. The failure is reported accurately by **Test**, but there is no way to discover a working app id from inside Lidarr, and an app id supplied without its own matching secret will log in and then fail every media-URL request — so the album fails with `Failed to resolve a Qobuz media URL`. If `Test` passes but every track fails, this pairing is the first thing to check.
+- **Some accounts are rejected by the web player's app id.** Verified against two live accounts: one authenticated only with the scraped web-player app id, the other only with a different app id, each returning HTTP 401 for the other. Lidarr cannot discover a working app id on its own, and an app id supplied without its own matching secret will log in and then fail every media-URL request — so the album fails with `Failed to resolve a Qobuz media URL`. If **Test** passes but every track fails, this pairing is the first thing to check; [Choosing an App ID and Secret](#choosing-an-app-id-and-secret-) gives a known-good pair.
 - **An account without a current streaming entitlement silently gets 30-second previews.** Qobuz answers `getFileUrl` with `sample: true` and a 320kbps MP3 rather than an error, for *every* requested format including FLAC. The plugin detects this and fails the track (`Qobuz returned a preview sample ... so this account cannot stream FLAC Lossless`) rather than importing a truncated preview as a lossless file, so the symptom of a lapsed subscription is an album that fails rather than a library full of 30-second tracks.
 - **Hi-Res albums always offer 192kHz.** Qobuz marks an album Hi-Res streamable without saying which rate it will actually serve, so both 96kHz and 192kHz are published. Ask for 192 and Qobuz may hand back 96 — which is harmless, but the grabbed release is then labelled more optimistically than the file.
 - **Search results estimate file size.** Qobuz exposes no cheap way to learn an album's byte size, so releases carry a figure derived from duration and bitrate. FLAC compresses, so the estimate runs high, and size-based custom formats act on an approximation. The real byte count replaces it once a download completes.
