@@ -149,3 +149,9 @@ _temp_*/**/*
 ## Merge any idea folder
 */**/.idea
 *.iml
+
+# Local credentials. .env holds a Qobuz user id and auth token, which together
+# are a full account bearer credential.
+.env
+.env.*
+!.env.example
