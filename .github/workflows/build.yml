@@ -52,8 +52,13 @@ jobs:
           sed -i'' -e "s/<AssemblyVersion>[0-9.*]\+<\/AssemblyVersion>/<AssemblyVersion>$MINIMUM_LIDARR_VERSION<\/AssemblyVersion>/g" ext/Lidarr/src/Directory.Build.props
       - name: Build
         run: |
-          dotnet restore src/*.sln
-          dotnet build src/*.sln -c Release -f ${{ matrix.framework }}
+          # -p:NuGetAudit=false: ext/Lidarr sets TreatWarningsAsErrors, so a newly
+          # published advisory against one of ITS dependencies (currently MailKit,
+          # GHSA-9j88-vvj5-vhgr) is promoted to NU1902 and breaks the build. The
+          # package is upstream Lidarr's, not this plugin's, and cannot be bumped
+          # from here because ext/Lidarr is a submodule tracking upstream.
+          dotnet restore src/*.sln -p:NuGetAudit=false
+          dotnet build src/*.sln -c Release -f ${{ matrix.framework }} -p:NuGetAudit=false --no-restore
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -79,7 +84,10 @@ jobs:
           tag_name: ${{ env.PLUGIN_VERSION }}
           name: ${{ env.PLUGIN_VERSION }}
           body_path: changelog.txt
-          draft: true
+          # draft: false is required. Lidarr fetches releases from GitHub's API
+          # unauthenticated, and that response omits drafts entirely, so a draft
+          # release makes Lidarr log "No releases found" and refuse to install.
+          draft: false
           prerelease: false
           files: |
             ${{ env.PLUGIN_NAME }}.net8.0.zip
