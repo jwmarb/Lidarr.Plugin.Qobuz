@@ -48,6 +48,9 @@ Note that the indexer and the download client are separate Lidarr providers, so 
 
 ## How to Install ⚡
 
+> [!TIP]
+> New to this plugin? **[docs/SETUP.md](docs/SETUP.md)** is a step-by-step setup guide that walks through obtaining every credential and flipping the three Lidarr settings that otherwise silently block downloads.
+
 ### Prerequisites 📦
 
 - A Lidarr instance on the [`plugins` branch](https://wiki.servarr.com/lidarr/installation) — plugins do not load on `master`.
@@ -122,6 +125,8 @@ services:
 | `Use LRCLIB as Lyric Provider` | `false` | Qobuz supplies no lyrics, so enable this to fetch them from LRCLIB. |
 
 ## Choosing an App ID and Secret 🔑
+
+For a guided walkthrough of this and every other field, see **[docs/SETUP.md](docs/SETUP.md)**.
 
 `App ID` and `App Secret` are Qobuz's **API client credentials** — they identify the *application* talking to the API, like the web player or the mobile app. They are not tied to your account, they are not per-user secrets, and they are the same values for everybody.
 
