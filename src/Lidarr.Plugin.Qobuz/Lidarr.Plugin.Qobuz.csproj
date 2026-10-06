@@ -25,7 +25,7 @@
     Optional local deploy of the merged plugin assembly, opt-in via a property:
 
       dotnet build src/Lidarr.Plugin.Qobuz.sln -c Release -f net8.0 \
-        -p:QobuzPluginDeployPath=/path/to/lidarr/plugins/TrevTV/Lidarr.Plugin.Qobuz
+        -p:QobuzPluginDeployPath=/path/to/lidarr/plugins/jwmarb/Lidarr.Plugin.Qobuz
 
     This replaces a hardcoded Windows `COPY` to C:\ProgramData\Lidarr\plugins\...,
     which failed with MSB3073 (exit 127) on every non-Windows build. Using the

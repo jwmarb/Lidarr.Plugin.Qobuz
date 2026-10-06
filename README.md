@@ -82,7 +82,7 @@ services:
 1. In Lidarr, go to `System -> Plugins`, paste the repository URL into the GitHub URL box, and press **Install**. Restart Lidarr when it asks you to.
 
    ```
-   https://github.com/TrevTV/Lidarr.Plugin.Qobuz
+   https://github.com/jwmarb/Lidarr.Plugin.Qobuz
    ```
 
 2. Go to `Settings -> Indexers`, press **Add**, and choose **Qobuz** (under *Other*, at the bottom).
@@ -167,7 +167,7 @@ Two traps worth knowing before adding tests, both documented in [`BUILD-NOTES.md
 ## Building from Source 🔨
 
 ```sh
-git clone --recurse-submodules https://github.com/TrevTV/Lidarr.Plugin.Qobuz
+git clone --recurse-submodules https://github.com/jwmarb/Lidarr.Plugin.Qobuz
 cd Lidarr.Plugin.Qobuz
 dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false
 ```
@@ -184,11 +184,11 @@ Two further notes, both expanded in [`BUILD-NOTES.md`](BUILD-NOTES.md):
 
 A clean build reports **7 warnings, all inside `ext/QobuzApiSharp`** (obsolete serialization members on its exception types) and **none from this plugin's own code**. An incremental rebuild reports zero, because the submodule is not recompiled — so don't quote that number without qualification.
 
-The result lands in `_plugins/net8.0/Lidarr.Plugin.Qobuz/`. Copy the `.dll`, `.pdb`, and `.deps.json` into `<lidarr-config>/plugins/TrevTV/Lidarr.Plugin.Qobuz/` and restart Lidarr. To have a local build deployed for you, pass a path:
+The result lands in `_plugins/net8.0/Lidarr.Plugin.Qobuz/`. Copy the `.dll`, `.pdb`, and `.deps.json` into `<lidarr-config>/plugins/jwmarb/Lidarr.Plugin.Qobuz/` and restart Lidarr — the folder must match the plugin's declared owner. To have a local build deployed for you, pass a path:
 
 ```sh
 dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false \
-  -p:QobuzPluginDeployPath=/path/to/lidarr/plugins/TrevTV/Lidarr.Plugin.Qobuz
+  -p:QobuzPluginDeployPath=/path/to/lidarr/plugins/jwmarb/Lidarr.Plugin.Qobuz
 ```
 
 ## Known Limitations ⚠️
