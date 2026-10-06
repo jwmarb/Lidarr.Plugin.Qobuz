@@ -172,6 +172,31 @@ cd Lidarr.Plugin.Qobuz
 dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false
 ```
 
+> [!CAUTION]
+> **A plain local build produces a plugin that real Lidarr cannot load.** The plugin uses a `ProjectReference` to the `ext/Lidarr` submodule, so the compiler bakes the submodule's *own* assembly version into the reference. Unstamped, that is `Lidarr.Core, Version=10.0.0.40333` — a version no released Lidarr has — and the host logs `Error starting with plugins enabled` / `Could not load file or assembly 'Lidarr.Core'`, then **silently restarts with all plugins disabled**. Note the blast radius: *every* plugin stops loading, not just this one.
+>
+> CI avoids this by stamping the versions before building ([`build.yml`](.github/workflows/build.yml)). To build a locally-installable plugin, do the same:
+>
+> ```sh
+> sed -i'' -e 's#<AssemblyVersion>[0-9.*]\+</AssemblyVersion>#<AssemblyVersion>10.1.0.0</AssemblyVersion>#g' \
+>   src/Directory.Build.props
+> sed -i'' -e 's#<AssemblyVersion>[0-9.*]\+</AssemblyVersion>#<AssemblyVersion>3.0.0.4855</AssemblyVersion>#g' \
+>   ext/Lidarr/src/Directory.Build.props
+> dotnet build src/*.sln -c Release -f net8.0 -p:NuGetAudit=false
+> ```
+>
+> The second value must be the **minimum Lidarr version** the plugin targets (`3.0.0.4855`), not your submodule's checkout.
+>
+> Verify before deploying. A correctly stamped build reports its own version as `10.1.x.x`; an unstamped one reports `10.0.0.4xxxx`, which is the tell that it will not load:
+>
+> ```sh
+> python3 -c "import re; d=open('_plugins/net8.0/Lidarr.Plugin.Qobuz/Lidarr.Plugin.Qobuz.dll','rb').read(); \
+> v=sorted({m.decode() for m in re.findall(rb'10[.][0-9]+[.][0-9]+[.][0-9]+', d)}); \
+> print(v, 'OK' if all(x.startswith('10.1.') for x in v) else 'UNSTAMPED - DO NOT DEPLOY')"
+> ```
+>
+> Installing from a GitHub release sidesteps all of this, because CI has already stamped it.
+
 > [!IMPORTANT]
 > **Build the `.sln`, never the `.csproj`.** `ext/Lidarr` wires StyleCop up through
 > `$(SolutionDir)`, which is empty for a project-only build, so `stylecop.json` is never
